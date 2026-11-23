@@ -42,9 +42,12 @@ interface BodyPreset {
   jiggle: number;
 }
 const BODY_PRESETS: Record<string, BodyPreset> = {
-  "female": { label: "Female · natural", voice: "female", anatomy: { female: 1, fat: 0.35, muscle: 0.45, breast: 0.6, butt: 0.6 }, penis: "none", jiggle: 1.15 },
-  "female-curvy": { label: "Female · curvy", voice: "female", anatomy: { female: 1, fat: 0.78, muscle: 0.25, breast: 1.15, butt: 1.15 }, penis: "none", jiggle: 1.45 },
-  "female-athletic": { label: "Female · athletic", voice: "female", anatomy: { female: 1, fat: 0.1, muscle: 0.95, breast: 0.4, butt: 0.7 }, penis: "none", jiggle: 0.85 },
+  // every slider at 0 is MakeHuman's average young adult, so the shapes are named from there
+  "female-petite": { label: "Female · petite", voice: "female", anatomy: { female: 1, fat: 0, muscle: 0.2, breast: 0, butt: 0 }, penis: "none", jiggle: 1.0 },
+  "female": { label: "Female · natural", voice: "female", anatomy: { female: 1, fat: 0.1, muscle: 0.35, breast: 0.3, butt: 0.3 }, penis: "none", jiggle: 1.1 },
+  "female-curvy": { label: "Female · curvy", voice: "female", anatomy: { female: 1, fat: 0.15, muscle: 0.3, breast: 0.9, butt: 1 }, penis: "none", jiggle: 1.3 },
+  "female-heavy": { label: "Female · heavy", voice: "female", anatomy: { female: 1, fat: 0.8, muscle: 0.25, breast: 1, butt: 1 }, penis: "none", jiggle: 1.45 },
+  "female-athletic": { label: "Female · athletic", voice: "female", anatomy: { female: 1, fat: 0.05, muscle: 0.95, breast: 0.2, butt: 0.6 }, penis: "none", jiggle: 0.85 },
   "male": { label: "Male · natural", voice: "male", anatomy: { female: 0, fat: 0.22, muscle: 0.55, breast: 0, butt: 0.25 }, penis: "M", jiggle: 0.95 },
   "male-athletic": { label: "Male · muscular", voice: "male", anatomy: { female: 0, fat: 0.08, muscle: 1.15, breast: 0, butt: 0.45 }, penis: "M", jiggle: 0.75 },
   "male-heavy": { label: "Male · heavy", voice: "male", anatomy: { female: 0, fat: 0.95, muscle: 0.3, breast: 0.15, butt: 0.65 }, penis: "M", jiggle: 1.3 },
@@ -273,6 +276,12 @@ field("body").onchange = () => {
   syncSliderLabels();
   if (p.voice !== currentSex) {
     buildCharacter(p.voice, p.anatomy, true);
+    // a clip under way was carried onto the old rig: read again for the new one (it kept posing
+    // the old, and the new body stood unposed)
+    if (motion) {
+      motion = null;
+      void playClip(Number(field("clip").value) || 0);
+    }
   } else {
     rig.setAnatomy(p.anatomy);
     armOut = armClearance(rig);
