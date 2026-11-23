@@ -32,6 +32,36 @@ export interface BoneDef {
   tail: number[];
   helper?: boolean;
 }
+export interface TissueDef {
+  name: string;
+  bone: string;
+  side: -1 | 0 | 1;
+  centerMale: number[];
+  centerFemale: number[];
+  radius: number;
+}
+export interface AnatomyHeader {
+  morphNames: string[];
+  morphScale: number;
+  femaleBones: { head: number[]; tail: number[] }[];
+  femalePoints: Record<string, number[]>;
+  femaleRimShape: { centre: number[]; a: number; b: number };
+  tissues: TissueDef[];
+}
+export interface AnatomyParams {
+  /** 0 = adult male, 1 = adult female (continuous morph + skeletal proportions) */
+  female: number;
+  /** 0..1 subcutaneous body fat / adipose fullness */
+  fat: number;
+  /** 0..1 muscular build / bulk */
+  muscle: number;
+  /** 0..1 breast cup volume */
+  breast: number;
+  /** 0..1 gluteal / buttocks volume */
+  butt: number;
+}
+export const ANATOMY_DEFAULT: Readonly<AnatomyParams> = { female: 0, fat: 0, muscle: 0, breast: 0, butt: 0 };
+
 export interface Header {
   source: string;
   licence: string;
@@ -42,6 +72,7 @@ export interface Header {
   influences: number;
   vertices: number;
   quads: number;
+  anatomy?: AnatomyHeader;
 }
 
 export type Method = "lbs" | "cor";
@@ -97,6 +128,16 @@ export class Rig {
   readonly INF: number;
   /** rest positions (cm), n × 3 */
   rest: Float32Array;
+  /** unmorphed male body rest positions (cm), bodyVertices × 3 */
+  readonly baseRest: Float32Array;
+  /** decoded morph target vertex deltas (cm), keyed by morph name */
+  readonly morphs: Record<string, Float32Array> = {};
+  /** decoded soft-tissue vertex weights (0..1), keyed by region name */
+  readonly tissues: Record<string, Float32Array> = {};
+  /** soft-tissue region metadata (centres, parent bones, radii) */
+  readonly tissueDefs: TissueDef[] = [];
+  /** current anatomy morph weights */
+  readonly anatomy: AnatomyParams = { ...ANATOMY_DEFAULT };
   quads: Uint32Array;
   skinIndex: Uint8Array;
   skinWeight: Float32Array;
@@ -118,6 +159,9 @@ export class Rig {
 
   /** rest joint places */
   readonly H: THREE.Vector3[];
+  private readonly maleBones: { head: number[]; tail: number[] }[];
+  private readonly malePoints: Record<string, number[]>;
+  private readonly maleRimShape: { centre: number[]; a: number; b: number };
   /** rest → neutral turn per bone */
   readonly N: THREE.Quaternion[];
   /** posed: each bone's turn from rest, where its head is, and the transform's shift (x' = S x + t) */
@@ -140,6 +184,7 @@ export class Rig {
     const n = (this.n = header.vertices), nq = (this.nq = header.quads), INF = (this.INF = header.influences);
     let o = 4 + len;
     this.rest = new Float32Array(buf.slice(o, o + 12 * n));
+    this.baseRest = this.rest.slice();
     o += 12 * n;
     this.skinIndex = new Uint8Array(buf.slice(o, o + INF * n));
     o += INF * n;
@@ -147,7 +192,32 @@ export class Rig {
     o += 2 * INF * n;
     this.skinWeight = Float32Array.from(w16, (w) => w / 65535);
     this.quads = Uint32Array.from(new Uint16Array(buf.slice(o, o + 8 * nq)));
+    o += 8 * nq;
+    if (header.anatomy) {
+      const a = header.anatomy;
+      o += o % 4 ? 4 - (o % 4) : 0;
+      const mCount = a.morphNames.length, mStride = 3 * n;
+      const mRaw = new Int16Array(buf.slice(o, o + 2 * mCount * mStride));
+      o += 2 * mCount * mStride;
+      a.morphNames.forEach((name, m) => {
+        const d = new Float32Array(mStride);
+        const base = m * mStride;
+        for (let i = 0; i < mStride; i++) d[i] = mRaw[base + i] * a.morphScale;
+        this.morphs[name] = d;
+      });
+      this.tissueDefs = a.tissues;
+      const tRaw = new Uint8Array(buf.slice(o, o + a.tissues.length * n));
+      a.tissues.forEach((td, t) => {
+        const w = new Float32Array(n);
+        const base = t * n;
+        for (let i = 0; i < n; i++) w[i] = tRaw[base + i] / 255;
+        this.tissues[td.name] = w;
+      });
+    }
     this.bones = header.bones;
+    this.maleBones = header.bones.map((b) => ({ head: [...b.head], tail: [...b.tail] }));
+    this.malePoints = Object.fromEntries(Object.entries(header.points).map(([k, v]) => [k, [...v]]));
+    this.maleRimShape = { centre: [...header.rimShape.centre], a: header.rimShape.a, b: header.rimShape.b };
     this.B = this.bones.length;
     this.idx = Object.fromEntries(this.bones.map((b, i) => [b.name, i]));
     this.rim = header.rim;
@@ -161,6 +231,73 @@ export class Rig {
     this.t = this.bones.map(() => new THREE.Vector3());
     this.sc = this.bones.map(() => 1);
     this.N = this.neutralTurns();
+  }
+
+  /**
+   * Shape the body's anatomy from the embedded MakeHuman morph targets (`female`, `fat`, `muscle`,
+   * `breast`, `butt`). Changing `female` updates the skeleton's joint proportions and neck rim as
+   * well (call before `wearHead`, or recreate the rig and head when toggling sex). Body-shaping
+   * morphs (`fat`, `muscle`, `breast`, `butt`) fade to zero at the neck rim and update live.
+   */
+  setAnatomy(params: Partial<AnatomyParams>): void {
+    const a = this.header.anatomy;
+    if (!a) return;
+    const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
+    const prevFemale = this.anatomy.female;
+    if (params.female !== undefined) this.anatomy.female = clamp(params.female, 0, 1);
+    if (params.fat !== undefined) this.anatomy.fat = clamp(params.fat, 0, 1.5);
+    if (params.muscle !== undefined) this.anatomy.muscle = clamp(params.muscle, 0, 1.5);
+    if (params.breast !== undefined) this.anatomy.breast = clamp(params.breast, 0, 1.5);
+    if (params.butt !== undefined) this.anatomy.butt = clamp(params.butt, 0, 1.5);
+
+    const f = this.anatomy.female;
+    const femaleChanged = Math.abs(f - prevFemale) > 1e-6;
+    const active: [Float32Array, number][] = [];
+    for (const [k, w] of [
+      ["female", this.anatomy.female],
+      ["fat", this.anatomy.fat],
+      ["muscle", this.anatomy.muscle],
+      ["breast", this.anatomy.breast],
+      ["butt", this.anatomy.butt],
+    ] as const) {
+      if (w && this.morphs[k]) active.push([this.morphs[k], w]);
+    }
+    const len = 3 * this.bodyVertices;
+    const prev = this.corCache && !femaleChanged ? this.rest.subarray(0, len).slice() : null;
+    this.rest.set(this.baseRest, 0);
+    for (const [delta, w] of active) {
+      for (let i = 0; i < len; i++) this.rest[i] += w * delta[i];
+    }
+    if (femaleChanged) {
+      const mix = (u: number, v: number) => u + (v - u) * f;
+      for (let i = 0; i < this.B; i++) {
+        const mb = this.maleBones[i], fb = a.femaleBones[i];
+        for (let k = 0; k < 3; k++) {
+          this.bones[i].head[k] = mix(mb.head[k], fb.head[k]);
+          this.bones[i].tail[k] = mix(mb.tail[k], fb.tail[k]);
+        }
+        this.H[i].fromArray(this.bones[i].head);
+        this.P[i].copy(this.H[i]);
+      }
+      for (const k of Object.keys(this.malePoints)) {
+        const mp = this.malePoints[k], fp = a.femalePoints[k];
+        this.header.points[k] = [mix(mp[0], fp[0]), mix(mp[1], fp[1]), mix(mp[2], fp[2])];
+      }
+      const mr = this.maleRimShape, fr = a.femaleRimShape;
+      this.header.rimShape = {
+        centre: [mix(mr.centre[0], fr.centre[0]), mix(mr.centre[1], fr.centre[1]), mix(mr.centre[2], fr.centre[2])],
+        a: mix(mr.a, fr.a),
+        b: mix(mr.b, fr.b),
+      };
+      const N = this.neutralTurns();
+      for (let i = 0; i < this.B; i++) this.N[i].copy(N[i]);
+      this.weightsChanged();
+    } else if (prev && this.corCache) {
+      // shift cached centres of rotation with the smooth surface morph (instant live slider feedback)
+      for (let i = 0; i < len; i++) this.corCache[i] += this.rest[i] - prev[i];
+    } else {
+      this.weightsChanged();
+    }
   }
 
   /** each vertex's neighbours and quads, and which are on an open edge */

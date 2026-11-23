@@ -11,9 +11,13 @@ import type { Pose } from "../src/rig/pose.ts";
 
 type Mods = {
   Rig: typeof import("../src/rig/rig.ts").Rig;
+  vertexNormals: typeof import("../src/rig/rig.ts").vertexNormals;
   motion: typeof import("../src/rig/motion.ts");
   pose: typeof import("../src/rig/pose.ts");
   head: typeof import("../src/rig/head.ts");
+  physics: typeof import("../src/rig/physics.ts");
+  muscles: typeof import("../src/rig/muscles.ts");
+  walk: typeof import("../src/rig/walk.ts");
   VoiceModel: typeof import("../src/ui/analysis.ts").VoiceModel;
   BODIES: typeof import("../src/ui/body.ts").PRESETS;
   REST_ARTIC: typeof import("../src/ui/render/anatomy3d.ts").REST_ARTIC;
@@ -22,8 +26,19 @@ let M: Mods;
 beforeAll(async () => {
   await initEngine();
   // the head reads the engine's tables as it loads: after the engine
-  const [rig, pose, head, analysis, body, a3d, motion] = await Promise.all([import("../src/rig/rig.ts"), import("../src/rig/pose.ts"), import("../src/rig/head.ts"), import("../src/ui/analysis.ts"), import("../src/ui/body.ts"), import("../src/ui/render/anatomy3d.ts"), import("../src/rig/motion.ts")]);
-  M = { Rig: rig.Rig, motion, pose, head, VoiceModel: analysis.VoiceModel, BODIES: body.PRESETS, REST_ARTIC: a3d.REST_ARTIC };
+  const [rig, pose, head, analysis, body, a3d, motion, physics, muscles, walk] = await Promise.all([
+    import("../src/rig/rig.ts"),
+    import("../src/rig/pose.ts"),
+    import("../src/rig/head.ts"),
+    import("../src/ui/analysis.ts"),
+    import("../src/ui/body.ts"),
+    import("../src/ui/render/anatomy3d.ts"),
+    import("../src/rig/motion.ts"),
+    import("../src/rig/physics.ts"),
+    import("../src/rig/muscles.ts"),
+    import("../src/rig/walk.ts"),
+  ]);
+  M = { Rig: rig.Rig, vertexNormals: rig.vertexNormals, motion, pose, head, physics, muscles, walk, VoiceModel: analysis.VoiceModel, BODIES: body.PRESETS, REST_ARTIC: a3d.REST_ARTIC };
 });
 
 function loadRig(): RigT {
@@ -466,5 +481,136 @@ describe("motion from other tools", () => {
     moved.pose(0.5);
     motion.pose(0.5);
     expect(jointsApart(dst, still, false).cm).toBeLessThan(0.01);
+  });
+});
+
+describe("anatomy morphs, soft-tissue jiggle, muscles & walking gait", () => {
+  test("male and female anatomy morph cleanly with valid skeletal proportions and closed head join", () => {
+    const male = loadRig();
+    const female = loadRig();
+    female.setAnatomy({ female: 1, fat: 0.4, muscle: 0.5, breast: 0.6, butt: 0.6 });
+
+    // Female body is shorter at the neck rim with distinct chest/pelvis geometry
+    expect(female.header.rimShape.centre[1]).toBeLessThan(male.header.rimShape.centre[1] - 8);
+    expect(female.H[female.bone("upperchest")].y).toBeLessThan(male.H[male.bone("upperchest")].y - 6);
+
+    // Body-shaping morphs (fat, muscle, breast, butt) preserve the neck rim so they can update live
+    const rimBefore = female.rim.map((i) => at(female.rest, i));
+    female.setAnatomy({ fat: 1.0, muscle: 0.2, breast: 1.0, butt: 1.0 });
+    female.rim.forEach((i, k) => expect(at(female.rest, i).distanceTo(rimBefore[k])).toBeLessThan(1e-3));
+
+    // Female CHIMERA head fits cleanly onto the morphed female neck rim with only the lips cut open
+    const model = new M.VoiceModel(M.BODIES.female, 48000);
+    M.head.wearHead(female, model);
+    const open = openEdges(female);
+    expect(open.every(([a, b]) => a >= female.bodyVertices && b >= female.bodyVertices)).toBe(true);
+    // Neutral pose still hangs arms straight down on the female skeleton
+    female.pose(M.pose.neutral());
+    for (const s of ["R", "L"]) {
+      const dir = female.P[female.bone(`forearm.${s}`)].clone().sub(female.P[female.bone(`upperarm.${s}`)]).normalize();
+      expect(dir.y).toBeLessThan(-0.999);
+    }
+    model.dispose();
+  });
+
+  test("soft-tissue physics produces stable breast and butt jiggle during female walking and quiets when disabled", () => {
+    const rig = loadRig();
+    rig.setAnatomy({ female: 1, fat: 0.55, muscle: 0.3, breast: 0.85, butt: 0.85 });
+    const tissue = new M.physics.SoftTissue(rig);
+    const skinned = new Float32Array(3 * rig.n);
+    let peakBreast = 0, peakButt = 0;
+
+    for (let step = 0; step < 120; step++) {
+      const wf = M.walk.walkFrame(step / 60, "catwalk", rig.anatomy);
+      rig.pose(wf.pose);
+      tissue.step(1 / 60);
+      rig.skin(skinned);
+      const before = skinned.slice();
+      tissue.apply(skinned);
+      for (let i = 0; i < skinned.length; i++) expect(Number.isFinite(skinned[i])).toBe(true);
+      peakBreast = Math.max(peakBreast, tissue.region("breastL")!.magnitude, tissue.region("breastR")!.magnitude);
+      peakButt = Math.max(peakButt, tissue.region("buttL")!.magnitude, tissue.region("buttR")!.magnitude);
+      if (step === 60) expect(maxMove(before, skinned, [...Array(rig.bodyVertices).keys()])).toBeGreaterThan(0.2);
+    }
+    // Realistic anatomical bounce range (cm): clearly visible, bounded below explosion
+    expect(peakBreast).toBeGreaterThan(0.4);
+    expect(peakBreast).toBeLessThan(6.0);
+    expect(peakButt).toBeGreaterThan(0.25);
+    expect(peakButt).toBeLessThan(5.0);
+
+    // Lean male chest has minimal breast jiggle compared to female
+    const male = loadRig();
+    male.setAnatomy({ female: 0, fat: 0.08, muscle: 1.0, breast: 0, butt: 0.3 });
+    const maleTissue = new M.physics.SoftTissue(male);
+    let maleBreast = 0;
+    for (let step = 0; step < 60; step++) {
+      male.pose(M.walk.walkFrame(step / 60, "walk", male.anatomy).pose);
+      maleTissue.step(1 / 60);
+      maleBreast = Math.max(maleBreast, maleTissue.region("breastL")!.magnitude);
+    }
+    expect(maleBreast).toBeLessThan(0.15);
+
+    // Disabling jiggle yields zero displacement
+    tissue.settings.enabled = false;
+    tissue.step(1 / 60);
+    expect(tissue.region("breastL")!.magnitude).toBe(0);
+    expect(tissue.region("buttR")!.magnitude).toBe(0);
+  });
+
+  test("muscle system fires kinematically on flex biceps, follows gait loads, bulges skin, and renders cleanly", () => {
+    const rig = loadRig();
+    rig.setAnatomy({ female: 0, fat: 0.05, muscle: 1.0, breast: 0, butt: 0.3 });
+    const ms = new M.muscles.MuscleSystem(rig);
+    expect(ms.muscles.length).toBe(30);
+
+    // Kinematic activation: flexing biceps fires biceps.L and biceps.R strongly without external loads
+    rig.pose(M.pose.PRESETS["flex biceps"]);
+    ms.update(0);
+    expect(ms.byName.get("biceps.R")!.activation).toBeGreaterThan(0.5);
+    expect(ms.byName.get("biceps.L")!.activation).toBeGreaterThan(0.5);
+
+    // Volume-preserving surface bulge moves nearby skin vertices outward and attenuates under high body fat
+    const skinned = new Float32Array(3 * rig.n);
+    const norms = new Float32Array(3 * rig.n);
+    rig.skin(skinned);
+    M.vertexNormals(rig, skinned, norms);
+    const leanBase = skinned.slice();
+    ms.deform(skinned, norms);
+    const leanMove = maxMove(leanBase, skinned, [...Array(rig.bodyVertices).keys()]);
+    expect(leanMove).toBeGreaterThan(0.3);
+
+    rig.setAnatomy({ fat: 1.0 });
+    const fatSkinned = leanBase.slice();
+    ms.deform(fatSkinned, norms);
+    const fatMove = maxMove(leanBase, fatSkinned, [...Array(rig.bodyVertices).keys()]);
+    expect(fatMove).toBeLessThan(leanMove);
+
+    // Gait load firing & vector beam draw (headless safe)
+    const wf = M.walk.walkFrame(0.44 / 0.96, "walk", rig.anatomy);
+    rig.pose(wf.pose);
+    ms.update(0, wf.loads);
+    expect(ms.byName.get("gastrocnemius.R")!.activation).toBeGreaterThan(0.6);
+    ms.draw();
+    ms.dispose();
+  });
+
+  test("walking gait is periodic, finite across all styles, and adapts hip sway to female anatomy", () => {
+    for (const style of M.walk.GAIT_STYLES) {
+      const a = M.walk.walkFrame(0, style, { female: 1 });
+      const b = M.walk.walkFrame(100, style, { female: 1 });
+      expect(a.speedCmPerSec).toBeGreaterThan(50);
+      expect(Number.isFinite(b.pose.body.y)).toBe(true);
+      expect(Number.isFinite(b.pose.legs.R.flex)).toBe(true);
+    }
+    // Periodicity: exactly one cycle returns identical angles
+    const t0 = M.walk.walkFrame(0.15, "walk", { female: 0.5 });
+    const t1 = M.walk.walkFrame(0.15 + 1 / 0.96, "walk", { female: 0.5 });
+    expect(t0.pose.legs.R.flex).toBeCloseTo(t1.pose.legs.R.flex, 4);
+    expect(t0.pose.legs.L.knee).toBeCloseTo(t1.pose.legs.L.knee, 4);
+    // Female gait has fuller pelvic list / sway at mid-stance than male gait
+    const mMid = M.walk.walkFrame(0.25 / 0.96, "walk", { female: 0 });
+    const fMid = M.walk.walkFrame(0.25 / 0.96, "walk", { female: 1 });
+    expect(Math.abs(fMid.pose.body.lean)).toBeGreaterThan(Math.abs(mMid.pose.body.lean));
+    expect(Math.abs(fMid.pose.body.z)).toBeGreaterThan(Math.abs(mMid.pose.body.z));
   });
 });

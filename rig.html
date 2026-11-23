@@ -3,22 +3,55 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CHIMERA body rig</title>
+<title>CHIMERA body rig — anatomy, muscles & soft-tissue physics</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #000; color: #4fb6f2; font: 13px/1.4 ui-sans-serif, system-ui, sans-serif; overflow: hidden; }
+  html, body { margin: 0; height: 100%; background: #000; color: #a9dcf8; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; }
   canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  form { position: fixed; left: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: rgba(0, 0, 0, 0.6); padding: 8px 10px; border: 1px solid #133954; border-radius: 6px; }
-  select, input { accent-color: #4fb6f2; background: #000; color: inherit; border: 1px solid #1f5f8c; border-radius: 4px; font: inherit; }
+  #hud { position: fixed; left: 12px; top: 12px; padding: 6px 10px; background: rgba(0, 6, 12, 0.72); border: 1px solid #133954; border-radius: 4px; color: #a9dcf8; font-size: 11px; pointer-events: none; line-height: 1.5; min-width: 240px; }
+  #hud b { color: #effbff; font-weight: 600; }
+  #hud .hi { color: #ffb340; }
+  #hud .pk { color: #ff73cf; }
+  form { position: fixed; left: 12px; right: 12px; bottom: 10px; display: flex; flex-direction: column; gap: 5px; background: rgba(0, 6, 12, 0.8); padding: 7px 10px; border: 1px solid #133954; border-radius: 6px; max-width: 1180px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  select, input, button { accent-color: #4fb6f2; background: #000810; color: #e2f5fc; border: 1px solid #1f5f8c; border-radius: 4px; font: inherit; padding: 2px 5px; }
+  button { cursor: pointer; }
+  button:hover { border-color: #4fb6f2; color: #effbff; }
+  button.active { background: #133954; border-color: #4fb6f2; color: #effbff; }
+  input[type="range"] { width: 66px; padding: 0; border: 0; background: transparent; }
+  input[type="file"] { max-width: 150px; font-size: 11px; }
+  .val { color: #4fb6f2; min-width: 28px; text-align: right; display: inline-block; }
+  .cams { display: inline-flex; gap: 4px; }
 </style>
 </head>
 <body>
 <canvas></canvas>
+<div id="hud"></div>
 <form>
-  <label>pose <select name="pose"></select></label>
-  <label>mouth <input name="mouth" type="range" min="0" max="1" step="0.01" value="0"></label>
-  <label>head <select name="look"></select></label>
-  <label>motion <input name="motion" type="file" accept=".fbx,.bvh,.glb,.gltf"></label>
-  <select name="clip" hidden></select>
+  <div class="row">
+    <label>body <select name="body"></select></label>
+    <label>anim <select name="pose"></select></label>
+    <button type="button" name="play">pause</button>
+    <label>speed <input name="speed" type="range" min="0.2" max="1.8" step="0.05" value="1"><span class="val" data-for="speed">1.0</span></label>
+    <label>view <select name="view"></select></label>
+    <label>head <select name="look"></select></label>
+    <span class="cams">
+      <button type="button" data-cam="3/4">3/4</button>
+      <button type="button" data-cam="front">front</button>
+      <button type="button" data-cam="side">side</button>
+      <button type="button" data-cam="back">back</button>
+    </span>
+  </div>
+  <div class="row">
+    <label>fat <input name="fat" type="range" min="0" max="1.2" step="0.02" value="0.35"><span class="val" data-for="fat">0.35</span></label>
+    <label>muscle <input name="muscle" type="range" min="0" max="1.2" step="0.02" value="0.45"><span class="val" data-for="muscle">0.45</span></label>
+    <label>breast <input name="breast" type="range" min="0" max="1.2" step="0.02" value="0.55"><span class="val" data-for="breast">0.55</span></label>
+    <label>butt <input name="butt" type="range" min="0" max="1.2" step="0.02" value="0.55"><span class="val" data-for="butt">0.55</span></label>
+    <label>jiggle <input name="jiggle" type="range" min="0" max="2" step="0.05" value="1.15"><span class="val" data-for="jiggle">1.15</span></label>
+    <label>mouth <input name="mouth" type="range" min="0" max="1" step="0.01" value="0"></label>
+    <label>motion <input name="motion" type="file" accept=".fbx,.bvh,.glb,.gltf"></label>
+    <select name="clip" hidden></select>
+  </div>
 </form>
 <script type="module" src="/src/rig/demo.ts"></script>
 </body>

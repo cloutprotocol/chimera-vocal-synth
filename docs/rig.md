@@ -12,12 +12,15 @@ or play a motion file from another tool).
 
 | | |
 |---|---|
-| `src/rig/rig.ts` | the rig: loading, posing by joint angles, skinning |
+| `src/rig/rig.ts` | the rig: loading, anatomy morphs (male/female, fat, muscle, breast, butt), posing, skinning |
 | `src/rig/pose.ts` | the `Pose` type (anatomical angles), ranges of motion, presets |
 | `src/rig/head.ts` | `wearHead`: the head's skin grown from the neck, the head's lines on the head bone, the face moving |
+| `src/rig/physics.ts` | `SoftTissue`: 3-DOF damped spring-mass fat & jiggle physics for breasts, buttocks and belly |
+| `src/rig/muscles.ts` | `MuscleSystem`: 30 anatomical muscles with contraction bulging & CHIMERA vector fiber rendering |
+| `src/rig/walk.ts` | `walkFrame`: procedural biomechanical walking, catwalk and jog gait with EMG muscle loads |
 | `src/rig/motion.ts` | `Motion`: a clip from another tool (Mixamo's FBX, BVH, glTF) carried over onto the rig |
 | `src/rig/view.ts` | the wireframe in CHIMERA's blue (and heat and weights views for finding faults) |
-| `src/rig/body.rig.bin` | the mesh, skeleton and weights (generated: `bun tools/rig/gen-body.ts`, never edited) |
+| `src/rig/body.rig.bin` | the mesh, skeleton, weights, morphs and tissue masks (generated: `bun tools/rig/gen-body.ts`, never edited) |
 | `src/rig/demo.ts`, `rig.html` | the dev page (not in the app's build) |
 
 ## Use
@@ -77,7 +80,23 @@ is fitted to the model once.
 - **Body:** MakeHuman's CC0 low-poly body (proxy741, hand-laid loops), on MPFB2's Rigify human
   skeleton and weights: 33 bones, each limb bone split in two for twist, and Rigify's helpers
   (the shoulder's cap and the hip turn half way with the limb; the elbow and knee swell as they
-  bend).
+  bend). Embedded MakeHuman CC0 morph targets shape male/female proportions (with matching skeletal
+  joints and neck rim), body fat, muscularity, breast cup volume and gluteal volume (`rig.setAnatomy`).
+- **Soft-tissue physics (`src/rig/physics.ts`):** 3-DOF damped spring-mass oscillators on the
+  breasts (`breastL`/`R`, from MPFB2's `breast.L`/`R` vertex groups), buttocks (`buttL`/`R`, from
+  MakeHuman's buttocks volume target, split at the midline with ipsilateral thigh coupling) and
+  abdominal adipose (`belly`). Integrates in world space (4 symplectic substeps/frame) with static
+  gravity sag, anatomical inward collision clamping, and volume-preserving squash-and-stretch.
+- **Muscle system (`src/rig/muscles.ts`):** 30 superficial anatomical muscles (15 bilateral pairs)
+  anchored across the skeleton. Contraction combines kinematic shortening strain with optional
+  weight-bearing gait loads (`MuscleLoads`), twitch-filtered (~45 ms attack / ~130 ms decay) to
+  drive both normal-directed wireframe skin bulging (attenuated by body fat) and CHIMERA-style
+  glowing `Beams` striated fiber bundles (cool vector blue at rest, flaring amber to hot red-core
+  as muscles fire).
+- **Walking gait (`src/rig/walk.ts`):** periodic Catmull-Rom clinical gait curves (`walk`, `catwalk`,
+  `jog`) with heel-strike loading, mid-stance vault, push-off toe extension, pelvic list/yaw/sway,
+  thoracic counter-rotation, head stabilization, sex-aware stride nuances and phase-locked EMG
+  muscle loads.
 - **Poses** are angles as an anatomist names them, from anatomical zero (standing, arms
   hanging, thumbs forward). The shoulder is the ISB "globe": `raise`, `plane` (0 out to the side,
   90 forward) and `rotate`. Left and right take the same angles; the rig mirrors them. The rig

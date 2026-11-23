@@ -166,6 +166,9 @@ export class RigView {
   set backFaces(on: boolean) {
     this.back.visible = on;
   }
+  set alpha(a: number) {
+    for (const m of [this.mat, this.backMat]) m.uniforms.uAlpha.value = a;
+  }
 
   /** free the GPU's copies of its geometry and materials (take `group` out of the scene too) */
   dispose(): void {
