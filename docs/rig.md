@@ -16,10 +16,11 @@ or play a motion file from another tool).
 | `src/rig/pose.ts` | the `Pose` type (anatomical angles), ranges of motion, presets |
 | `src/rig/head.ts` | `wearHead`: the head's skin grown from the neck, the head's lines on the head bone, the face moving |
 | `src/rig/physics.ts` | `SoftTissue`: 3-DOF damped spring-mass fat & jiggle physics for breasts, buttocks and belly |
+| `src/rig/maleAnatomy.ts` | `MaleAnatomy`: all-quad male pelvic anatomy with size scaling (`S`–`XL`) & pendulum physics |
 | `src/rig/muscles.ts` | `MuscleSystem`: 30 anatomical muscles with contraction bulging & CHIMERA vector fiber rendering |
 | `src/rig/walk.ts` | `walkFrame`: procedural biomechanical walking, catwalk and jog gait with EMG muscle loads |
 | `src/rig/motion.ts` | `Motion`: a clip from another tool (Mixamo's FBX, BVH, glTF) carried over onto the rig |
-| `src/rig/view.ts` | the wireframe in CHIMERA's blue (and heat and weights views for finding faults) |
+| `src/rig/view.ts` | the wireframe in CHIMERA's blue (with adaptive 4× Catmull-Clark subdivision, heat & weights views) |
 | `src/rig/body.rig.bin` | the mesh, skeleton, weights, morphs and tissue masks (generated: `bun tools/rig/gen-body.ts`, never edited) |
 | `src/rig/demo.ts`, `rig.html` | the dev page (not in the app's build) |
 

@@ -15,7 +15,9 @@ type Mods = {
   motion: typeof import("../src/rig/motion.ts");
   pose: typeof import("../src/rig/pose.ts");
   head: typeof import("../src/rig/head.ts");
+  view: typeof import("../src/rig/view.ts");
   physics: typeof import("../src/rig/physics.ts");
+  maleAnatomy: typeof import("../src/rig/maleAnatomy.ts");
   muscles: typeof import("../src/rig/muscles.ts");
   walk: typeof import("../src/rig/walk.ts");
   VoiceModel: typeof import("../src/ui/analysis.ts").VoiceModel;
@@ -26,19 +28,21 @@ let M: Mods;
 beforeAll(async () => {
   await initEngine();
   // the head reads the engine's tables as it loads: after the engine
-  const [rig, pose, head, analysis, body, a3d, motion, physics, muscles, walk] = await Promise.all([
+  const [rig, pose, head, view, analysis, body, a3d, motion, physics, maleAnatomy, muscles, walk] = await Promise.all([
     import("../src/rig/rig.ts"),
     import("../src/rig/pose.ts"),
     import("../src/rig/head.ts"),
+    import("../src/rig/view.ts"),
     import("../src/ui/analysis.ts"),
     import("../src/ui/body.ts"),
     import("../src/ui/render/anatomy3d.ts"),
     import("../src/rig/motion.ts"),
     import("../src/rig/physics.ts"),
+    import("../src/rig/maleAnatomy.ts"),
     import("../src/rig/muscles.ts"),
     import("../src/rig/walk.ts"),
   ]);
-  M = { Rig: rig.Rig, vertexNormals: rig.vertexNormals, motion, pose, head, physics, muscles, walk, VoiceModel: analysis.VoiceModel, BODIES: body.PRESETS, REST_ARTIC: a3d.REST_ARTIC };
+  M = { Rig: rig.Rig, vertexNormals: rig.vertexNormals, motion, pose, head, view, physics, maleAnatomy, muscles, walk, VoiceModel: analysis.VoiceModel, BODIES: body.PRESETS, REST_ARTIC: a3d.REST_ARTIC };
 });
 
 function loadRig(): RigT {
@@ -612,5 +616,47 @@ describe("anatomy morphs, soft-tissue jiggle, muscles & walking gait", () => {
     const fMid = M.walk.walkFrame(0.25 / 0.96, "walk", { female: 1 });
     expect(Math.abs(fMid.pose.body.lean)).toBeGreaterThan(Math.abs(mMid.pose.body.lean));
     expect(Math.abs(fMid.pose.body.z)).toBeGreaterThan(Math.abs(mMid.pose.body.z));
+  });
+
+  test("adaptive 4× Catmull-Clark subdivision, independent male breast/butt jiggle, and male penis anatomy work cleanly", () => {
+    const rig = loadRig();
+    rig.setAnatomy({ female: 0, fat: 0.2, muscle: 0.4, breast: 1.0, butt: 1.0 });
+    const view = new M.view.RigView(rig);
+    expect(view.quadCount).toBe(rig.nq);
+    view.subdivide = 1;
+    expect(view.quadCount).toBe(4 * rig.nq);
+    rig.pose(M.walk.walkFrame(0.2, "walk", rig.anatomy).pose);
+    rig.skin(view.posed);
+    view.update();
+    view.dispose();
+
+    // Independent breast & butt jiggle works on male when breast/butt sliders are raised
+    const tissue = new M.physics.SoftTissue(rig);
+    let maleBreast = 0, maleButt = 0;
+    for (let step = 0; step < 60; step++) {
+      rig.pose(M.walk.walkFrame(step / 60, "walk", rig.anatomy).pose);
+      tissue.step(1 / 60);
+      maleBreast = Math.max(maleBreast, tissue.region("breastL")!.magnitude);
+      maleButt = Math.max(maleButt, tissue.region("buttL")!.magnitude);
+    }
+    expect(maleBreast).toBeGreaterThan(0.25);
+    expect(maleButt).toBeGreaterThan(0.15);
+
+    // Male external anatomy toggles cleanly with size and oscillates stably during walking
+    const maleGeo = new M.maleAnatomy.MaleAnatomy(rig);
+    maleGeo.size = M.maleAnatomy.PENIS_SIZES.none;
+    maleGeo.update(1 / 60);
+    expect(maleGeo.group.visible).toBe(false);
+    maleGeo.size = M.maleAnatomy.PENIS_SIZES.L;
+    let peakPenis = 0;
+    for (let step = 0; step < 60; step++) {
+      rig.pose(M.walk.walkFrame(step / 60, "walk", rig.anatomy).pose);
+      maleGeo.update(1 / 60);
+      peakPenis = Math.max(peakPenis, maleGeo.magnitude);
+    }
+    expect(maleGeo.group.visible).toBe(true);
+    expect(peakPenis).toBeGreaterThan(0.2);
+    expect(peakPenis).toBeLessThan(6.0);
+    maleGeo.dispose();
   });
 });

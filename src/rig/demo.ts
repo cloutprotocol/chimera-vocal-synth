@@ -1,9 +1,9 @@
 /**
  * The body rig wearing the CHIMERA head, as a dev page: `bun run dev`, then /rig.html.
- * Demonstrates male & female anatomy, fat/breast/butt soft-tissue jiggle physics, CHIMERA-style
- * vector muscle system with real-time contraction firing & skin bulging, and procedural walking
- * (walk, catwalk, jog) plus static poses and imported Mixamo/BVH/glTF motion clips.
- * Dev only (not in the app's build). See docs/rig.md.
+ * Demonstrates male & female anatomy (independent breast, butt, fat, muscle & male penis sizing),
+ * adaptive 4× Catmull-Clark detail on curvy/fat bodies, soft-tissue jiggle physics, CHIMERA-style
+ * vector muscle system, and procedural walking (walk, catwalk, jog) plus static poses and imported
+ * Mixamo/BVH/glTF motion clips. Dev only (not in the app's build). See docs/rig.md.
  */
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -15,6 +15,7 @@ import { initChimera } from "../wasm/chimera.ts";
 import rigUrl from "./body.rig.bin?url";
 import { Motion, readMotion } from "./motion.ts";
 import { SoftTissue } from "./physics.ts";
+import { MaleAnatomy, PENIS_SIZES } from "./maleAnatomy.ts";
 import { MuscleSystem, type MuscleLoads } from "./muscles.ts";
 import { GAIT_STYLES, walkFrame, type GaitStyle } from "./walk.ts";
 import type { AnatomyParams, Rig as RigT } from "./rig.ts";
@@ -23,7 +24,6 @@ import type { RigView as RigViewT } from "./view.ts";
 import type { VoiceModel as VoiceModelT } from "../ui/analysis.ts";
 
 await initChimera();
-// the head reads the engine's tables as it loads, so it comes after the engine
 const [{ Rig, vertexNormals }, { PRESETS }, { wearHead, HEAD_LOOKS, HEAD_LOOK }, { RigView }, { VoiceModel }, { PRESETS: BODIES }, { REST_ARTIC }] = await Promise.all([
   import("./rig.ts"),
   import("./pose.ts"),
@@ -38,15 +38,16 @@ interface BodyPreset {
   label: string;
   voice: "male" | "female";
   anatomy: AnatomyParams;
+  penis: keyof typeof PENIS_SIZES;
   jiggle: number;
 }
 const BODY_PRESETS: Record<string, BodyPreset> = {
-  "female": { label: "Female — natural", voice: "female", anatomy: { female: 1, fat: 0.35, muscle: 0.45, breast: 0.55, butt: 0.55 }, jiggle: 1.15 },
-  "female-curvy": { label: "Female — curvy", voice: "female", anatomy: { female: 1, fat: 0.72, muscle: 0.25, breast: 0.95, butt: 1.0 }, jiggle: 1.45 },
-  "female-athletic": { label: "Female — athletic", voice: "female", anatomy: { female: 1, fat: 0.1, muscle: 0.95, breast: 0.35, butt: 0.65 }, jiggle: 0.85 },
-  "male": { label: "Male — natural", voice: "male", anatomy: { female: 0, fat: 0.22, muscle: 0.55, breast: 0, butt: 0.25 }, jiggle: 0.9 },
-  "male-athletic": { label: "Male — muscular", voice: "male", anatomy: { female: 0, fat: 0.08, muscle: 1.1, breast: 0, butt: 0.45 }, jiggle: 0.7 },
-  "male-heavy": { label: "Male — heavy", voice: "male", anatomy: { female: 0, fat: 0.95, muscle: 0.3, breast: 0.1, butt: 0.65 }, jiggle: 1.3 },
+  "female": { label: "Female · natural", voice: "female", anatomy: { female: 1, fat: 0.35, muscle: 0.45, breast: 0.6, butt: 0.6 }, penis: "none", jiggle: 1.15 },
+  "female-curvy": { label: "Female · curvy", voice: "female", anatomy: { female: 1, fat: 0.78, muscle: 0.25, breast: 1.15, butt: 1.15 }, penis: "none", jiggle: 1.45 },
+  "female-athletic": { label: "Female · athletic", voice: "female", anatomy: { female: 1, fat: 0.1, muscle: 0.95, breast: 0.4, butt: 0.7 }, penis: "none", jiggle: 0.85 },
+  "male": { label: "Male · natural", voice: "male", anatomy: { female: 0, fat: 0.22, muscle: 0.55, breast: 0, butt: 0.25 }, penis: "M", jiggle: 0.95 },
+  "male-athletic": { label: "Male · muscular", voice: "male", anatomy: { female: 0, fat: 0.08, muscle: 1.15, breast: 0, butt: 0.45 }, penis: "M", jiggle: 0.75 },
+  "male-heavy": { label: "Male · heavy", voice: "male", anatomy: { female: 0, fat: 0.95, muscle: 0.3, breast: 0.15, butt: 0.65 }, penis: "M", jiggle: 1.3 },
 };
 
 const VIEW_MODES = ["anatomy", "muscles", "skin", "bones", "weights"] as const;
@@ -83,7 +84,6 @@ const floorGrid = (() => {
 })();
 scene.add(floorGrid);
 
-// Fetch body.rig.bin once so switching male <-> female is instantaneous
 const rigBuf = await (await fetch(rigUrl)).arrayBuffer();
 
 let rig!: RigT;
@@ -91,26 +91,30 @@ let model!: VoiceModelT;
 let head!: RigHead;
 let view!: RigViewT;
 let tissue!: SoftTissue;
+let maleGeo!: MaleAnatomy;
 let muscles!: MuscleSystem;
 let skinned!: Float32Array;
 let skinNormals!: Float32Array;
 let floorY = -85;
 
-// Form wiring
+// Form controls
 const form = document.querySelector("form")!;
 const field = (name: string) => form.elements.namedItem(name) as HTMLSelectElement & HTMLInputElement;
 const playBtn = form.elements.namedItem("play") as HTMLButtonElement;
+const camBtns = [...form.querySelectorAll<HTMLButtonElement>("button[data-cam]")];
 
 for (const [k, p] of Object.entries(BODY_PRESETS)) field("body").append(new Option(p.label, k));
 const animOptions = [...GAIT_STYLES, ...Object.keys(PRESETS)];
 field("pose").append(...animOptions.map((k) => new Option(GAIT_STYLES.includes(k as GaitStyle) ? `▶ ${k}` : k, k)));
 field("view").append(...VIEW_MODES.map((k) => new Option(k, k)));
 field("look").append(...Object.keys(HEAD_LOOKS).map((k) => new Option(k, k)));
+for (const k of Object.keys(PENIS_SIZES)) field("penis").append(new Option(k, k));
 
 field("body").value = "female";
 field("pose").value = "walk";
 field("view").value = "anatomy";
 field("look").value = HEAD_LOOK;
+field("penis").value = "none";
 
 const syncSliderLabels = () => {
   for (const el of form.querySelectorAll<HTMLElement>(".val[data-for]")) {
@@ -129,36 +133,49 @@ const readAnatomy = (): AnatomyParams => ({
   butt: Number(field("butt").value),
 });
 
+/** Boost mesh polygon density (4× Catmull-Clark) automatically whenever fat, breast, or butt volume increases. */
+const syncMeshDetail = () => {
+  if (!view || !rig) return;
+  const a = rig.anatomy;
+  const curvy = Math.max(a.fat, a.breast, a.butt);
+  view.subdivide = curvy >= 0.35 ? 1 : 0;
+};
+
 const applyViewMode = (mode: ViewMode) => {
-  if (!view || !muscles) return;
+  if (!view || !muscles || !maleGeo) return;
   if (mode === "anatomy") {
     view.mode = "wire";
     view.showBones = false;
     view.alpha = 0.8;
+    maleGeo.alpha = 0.8;
     muscles.look.gain = 0.92;
     muscles.look.tissueRings = true;
   } else if (mode === "muscles") {
     view.mode = "wire";
     view.showBones = false;
     view.alpha = 0.34;
+    maleGeo.alpha = 0.34;
     muscles.look.gain = 1.25;
     muscles.look.tissueRings = true;
   } else if (mode === "skin") {
     view.mode = "wire";
     view.showBones = false;
     view.alpha = 0.92;
+    maleGeo.alpha = 0.92;
     muscles.look.gain = 0;
     muscles.look.tissueRings = false;
   } else if (mode === "bones") {
     view.mode = "wire";
     view.showBones = true;
     view.alpha = 0.45;
+    maleGeo.alpha = 0.45;
     muscles.look.gain = 0.35;
     muscles.look.tissueRings = false;
   } else {
     view.mode = "weights";
     view.showBones = false;
     view.alpha = 0.92;
+    maleGeo.alpha = 0.92;
     muscles.look.gain = 0;
     muscles.look.tissueRings = false;
   }
@@ -166,11 +183,12 @@ const applyViewMode = (mode: ViewMode) => {
 
 function buildCharacter(sex: "male" | "female", anatomy: AnatomyParams, keepCamera = false): void {
   if (view) {
-    scene.remove(view.group, head.mount, muscles.group);
+    scene.remove(view.group, head.mount, muscles.group, maleGeo.group);
     view.dispose();
     head.dispose();
     model.dispose();
     muscles.dispose();
+    maleGeo.dispose();
   }
   currentSex = sex;
   rig = new Rig(rigBuf.slice(0));
@@ -180,12 +198,14 @@ function buildCharacter(sex: "male" | "female", anatomy: AnatomyParams, keepCame
   view = new RigView(rig);
   tissue = new SoftTissue(rig);
   tissue.settings.jiggle = Number(field("jiggle").value);
+  maleGeo = new MaleAnatomy(rig);
+  maleGeo.size = PENIS_SIZES[field("penis").value] ?? 0;
+  maleGeo.jiggle = Number(field("jiggle").value);
   muscles = new MuscleSystem(rig);
-  scene.add(view.group, head.mount, muscles.group);
+  scene.add(view.group, head.mount, muscles.group, maleGeo.group);
   skinned = new Float32Array(3 * rig.n);
   skinNormals = new Float32Array(3 * rig.n);
 
-  // Calibrate floor level to the lowest foot vertex at anatomical neutral
   rig.pose(PRESETS.neutral);
   rig.skin(skinned);
   let minY = Infinity;
@@ -193,6 +213,7 @@ function buildCharacter(sex: "male" | "female", anatomy: AnatomyParams, keepCame
   floorY = minY;
   floorGrid.position.y = floorY;
 
+  syncMeshDetail();
   applyViewMode(field("view").value as ViewMode);
   const w = innerWidth, h = innerHeight;
   head.resize(w, h);
@@ -204,23 +225,21 @@ function buildCharacter(sex: "male" | "female", anatomy: AnatomyParams, keepCame
 function bodyMid(): THREE.Vector3 {
   const hips = rig.P[rig.bone("hips")];
   const chest = rig.P[rig.bone("upperchest")];
-  return new THREE.Vector3((hips.x + chest.x) * 0.5, (hips.y + chest.y) * 0.5 - 22, (hips.z + chest.z) * 0.5);
+  return new THREE.Vector3((hips.x + chest.x) * 0.5, (hips.y + chest.y) * 0.5 - 20, (hips.z + chest.z) * 0.5);
 }
 
 function setCamera(which: string): void {
+  for (const b of camBtns) b.classList.toggle("active", b.dataset.cam === which);
   const c = bodyMid();
   controls.target.copy(c);
-  const dist = 365;
+  const dist = 360;
   if (which === "front") camera.position.copy(c).add(new THREE.Vector3(dist, 22, 0));
   else if (which === "side") camera.position.copy(c).add(new THREE.Vector3(0, 20, dist));
   else if (which === "back") camera.position.copy(c).add(new THREE.Vector3(-dist, 22, 42));
   else camera.position.copy(c).add(new THREE.Vector3(dist * 0.78, 28, dist * 0.6));
   controls.update();
 }
-
-for (const btn of form.querySelectorAll<HTMLButtonElement>("button[data-cam]")) {
-  btn.onclick = () => setCamera(btn.dataset.cam!);
-}
+for (const btn of camBtns) btn.onclick = () => setCamera(btn.dataset.cam!);
 
 // Initial character: female walking with anatomy/muscles/jiggle active
 const initPreset = BODY_PRESETS[field("body").value];
@@ -228,11 +247,11 @@ field("fat").value = String(initPreset.anatomy.fat);
 field("muscle").value = String(initPreset.anatomy.muscle);
 field("breast").value = String(initPreset.anatomy.breast);
 field("butt").value = String(initPreset.anatomy.butt);
+field("penis").value = initPreset.penis;
 field("jiggle").value = String(initPreset.jiggle);
 syncSliderLabels();
 buildCharacter(initPreset.voice, initPreset.anatomy, false);
 
-// Preset body selector (rebuilds head+body cleanly when sex changes)
 field("body").onchange = () => {
   const p = BODY_PRESETS[field("body").value];
   if (!p) return;
@@ -240,6 +259,7 @@ field("body").onchange = () => {
   field("muscle").value = String(p.anatomy.muscle);
   field("breast").value = String(p.anatomy.breast);
   field("butt").value = String(p.anatomy.butt);
+  field("penis").value = p.penis;
   field("jiggle").value = String(p.jiggle);
   syncSliderLabels();
   if (p.voice !== currentSex) {
@@ -247,20 +267,29 @@ field("body").onchange = () => {
   } else {
     rig.setAnatomy(p.anatomy);
     tissue.settings.jiggle = p.jiggle;
+    maleGeo.size = PENIS_SIZES[p.penis] ?? 0;
+    maleGeo.jiggle = p.jiggle;
+    syncMeshDetail();
     muscles.fitAnatomy();
   }
 };
 
-// Live body-shaping sliders (zero-lag instant update without rebuilding the head)
 for (const name of ["fat", "muscle", "breast", "butt"] as const) {
   field(name).oninput = () => {
     syncSliderLabels();
     rig.setAnatomy(readAnatomy());
+    syncMeshDetail();
   };
 }
+field("penis").onchange = () => {
+  maleGeo.size = PENIS_SIZES[field("penis").value] ?? 0;
+  maleGeo.reset();
+};
 field("jiggle").oninput = () => {
   syncSliderLabels();
-  tissue.settings.jiggle = Number(field("jiggle").value);
+  const j = Number(field("jiggle").value);
+  tissue.settings.jiggle = j;
+  maleGeo.jiggle = j;
 };
 field("speed").oninput = () => syncSliderLabels();
 field("view").onchange = () => applyViewMode(field("view").value as ViewMode);
@@ -275,9 +304,10 @@ let floorScroll = 0;
 playBtn.onclick = () => {
   playing = !playing;
   playBtn.textContent = playing ? "pause" : "play";
+  playBtn.classList.toggle("active", !playing);
 };
 
-// Motion file loader (Mixamo FBX, BVH, glTF — physics & muscles run automatically on clips too!)
+// Motion file loader (Mixamo FBX, BVH, glTF)
 let motion: Motion | null = null, motionT = 0, picked = 0;
 let file: { data: ArrayBuffer; name: string } | null = null;
 const playClip = async (clip: number, read = file && readMotion(file.data, file.name)) => {
@@ -287,6 +317,7 @@ const playClip = async (clip: number, read = file && readMotion(file.data, file.
     if (mine === picked) {
       [motion, motionT] = [new Motion(rig, root, clips[clip]), 0];
       tissue.reset();
+      maleGeo.reset();
     }
   } catch (e) {
     if (mine === picked) alert(e instanceof Error ? e.message : String(e));
@@ -309,6 +340,7 @@ field("pose").onchange = () => {
   motion = null;
   picked++;
   tissue.reset();
+  maleGeo.reset();
 };
 
 function resize(): void {
@@ -353,11 +385,10 @@ renderer.setAnimationLoop((now) => {
 
   controls.update();
 
-  // Soft-tissue physics & muscle biomechanics
   tissue.step(simDt);
+  maleGeo.update(simDt);
   muscles.update(simDt, loads);
 
-  // Skin → muscle bulge → soft-tissue jiggle → CHIMERA head face
   rig.skin(skinned);
   vertexNormals(rig, skinned, skinNormals);
   muscles.deform(skinned, skinNormals);
@@ -370,7 +401,6 @@ renderer.setAnimationLoop((now) => {
   muscles.draw(tissue, camera);
   composer.render();
 
-  // Lightweight HUD readout (~12 Hz)
   hudTick += dt;
   if (hudTick > 0.08) {
     hudTick = 0;
@@ -378,15 +408,18 @@ renderer.setAnimationLoop((now) => {
     const bR = tissue.region("breastR")?.magnitude ?? 0;
     const gL = tissue.region("buttL")?.magnitude ?? 0;
     const gR = tissue.region("buttR")?.magnitude ?? 0;
+    const pTxt = maleGeo.size > 0.01 ? ` · penis ${(maleGeo.magnitude * 10).toFixed(1)} mm` : "";
     const topMuscles = [...muscles.muscles]
       .sort((a, b) => b.activation - a.activation)
       .slice(0, 3)
       .filter((m) => m.activation > 0.08)
       .map((m) => `${m.name} ${(m.activation * 100).toFixed(0)}%`)
       .join(" · ");
+    const qk = (view.quadCount / 1000).toFixed(1);
+    const subTag = view.subdivide ? " · 4× CC" : "";
     hud.innerHTML =
-      `<b>CHIMERA RIG</b> · ${currentSex.toUpperCase()} · ${motion ? "clip" : sel}<br>` +
-      `<span class="pk">TISSUE Δ</span> breast ${(Math.max(bL, bR) * 10).toFixed(1)} mm · butt ${(Math.max(gL, gR) * 10).toFixed(1)} mm<br>` +
+      `<span class="title">CHIMERA // RIG</span> <span class="dim">· ${currentSex} · ${motion ? "clip" : sel} · ${qk}K quads${subTag}</span><br>` +
+      `<span class="pk">TISSUE Δ</span> breast ${(Math.max(bL, bR) * 10).toFixed(1)} mm · butt ${(Math.max(gL, gR) * 10).toFixed(1)} mm${pTxt}<br>` +
       `<span class="hi">MUSCLES</span> ${topMuscles || "rest"}`;
   }
 });

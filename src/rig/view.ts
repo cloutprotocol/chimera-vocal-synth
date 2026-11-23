@@ -13,7 +13,7 @@
 import * as THREE from "three";
 import { vertexNormals, type Rig } from "./rig.ts";
 
-const VERT = /* glsl */ `
+export const WIRE_VERT = /* glsl */ `
 attribute vec2 q;
 attribute float heat;
 attribute vec3 tint;
@@ -35,7 +35,7 @@ void main() {
   gl_Position = projectionMatrix * mv;
 }`;
 
-const FRAG = /* glsl */ `
+export const WIRE_FRAG = /* glsl */ `
 uniform vec3 uFill;
 uniform vec3 uLine;
 uniform vec3 uEdge;
@@ -75,6 +75,9 @@ void main() {
   gl_FragColor = vec4(col, uAlpha * (1.0 - 0.75 * uBack));
 }`;
 
+const VERT = WIRE_VERT;
+const FRAG = WIRE_FRAG;
+
 export type Mode = "wire" | "heat" | "weights";
 export interface Look {
   fill: [number, number, number];
@@ -83,6 +86,193 @@ export interface Look {
 }
 /** CHIMERA's blue: the app's #4fb6f2 for the lines, its mid blue at the silhouette (linear light) */
 export const CHIMERA_LOOK: Readonly<Look> = { fill: [0.003, 0.008, 0.016], line: [0.06, 0.36, 0.68], edge: [0.03, 0.2, 0.45] };
+
+/** Precomputed Catmull-Clark 1× subdivision stencil for real-time 4× quad density on curvy/fat bodies. */
+interface SubdivCache {
+  readonly n: number;
+  readonly nq: number;
+  readonly ne: number;
+  readonly nSub: number;
+  readonly nqSub: number;
+  /** edge endpoints and adjacent faces (-1 if open boundary edge) */
+  readonly eA: Uint32Array;
+  readonly eB: Uint32Array;
+  readonly eF0: Int32Array;
+  readonly eF1: Int32Array;
+  /** per-vertex incident neighbors and faces, packed CSR */
+  readonly vNearOff: Uint32Array;
+  readonly vNear: Uint32Array;
+  readonly vFaceOff: Uint32Array;
+  readonly vFace: Uint32Array;
+  /** open-edge neighbors per vertex (-1 if interior) */
+  readonly vOpen0: Int32Array;
+  readonly vOpen1: Int32Array;
+  /** subdivided quads (nqSub × 4) and triangle corner indices (6 * nqSub) */
+  readonly quads: Uint32Array;
+  readonly corner: Uint32Array;
+  readonly pos: Float32Array;
+  readonly norm: Float32Array;
+  readonly geo: THREE.BufferGeometry;
+}
+
+function buildSubdiv(rig: Rig): SubdivCache {
+  const { n, nq, quads: Q } = rig;
+  const edgeMap = new Map<number, number>();
+  const eAList: number[] = [], eBList: number[] = [], eF0List: number[] = [], eF1List: number[] = [];
+  const edgeKey = (a: number, b: number) => Math.min(a, b) * 1048576 + Math.max(a, b);
+  const quadEdges = new Uint32Array(4 * nq);
+
+  for (let f = 0; f < nq; f++) {
+    for (let j = 0; j < 4; j++) {
+      const a = Q[4 * f + j], b = Q[4 * f + ((j + 1) % 4)];
+      const k = edgeKey(a, b);
+      let ei = edgeMap.get(k);
+      if (ei === undefined) {
+        ei = eAList.length;
+        edgeMap.set(k, ei);
+        eAList.push(a);
+        eBList.push(b);
+        eF0List.push(f);
+        eF1List.push(-1);
+      } else {
+        eF1List[ei] = f;
+      }
+      quadEdges[4 * f + j] = ei;
+    }
+  }
+  const ne = eAList.length;
+  const eA = Uint32Array.from(eAList), eB = Uint32Array.from(eBList);
+  const eF0 = Int32Array.from(eF0List), eF1 = Int32Array.from(eF1List);
+
+  const nearList: number[][] = Array.from({ length: n }, () => []);
+  const faceList: number[][] = Array.from({ length: n }, () => []);
+  const vOpen0 = new Int32Array(n).fill(-1), vOpen1 = new Int32Array(n).fill(-1);
+  for (let ei = 0; ei < ne; ei++) {
+    const a = eA[ei], b = eB[ei];
+    nearList[a].push(b);
+    nearList[b].push(a);
+    if (eF1[ei] < 0) {
+      if (vOpen0[a] < 0) vOpen0[a] = b;
+      else vOpen1[a] = b;
+      if (vOpen0[b] < 0) vOpen0[b] = a;
+      else vOpen1[b] = a;
+    }
+  }
+  for (let f = 0; f < nq; f++) for (let j = 0; j < 4; j++) faceList[Q[4 * f + j]].push(f);
+
+  const vNearOff = new Uint32Array(n + 1), vFaceOff = new Uint32Array(n + 1);
+  let totalNear = 0, totalFace = 0;
+  for (let i = 0; i < n; i++) {
+    vNearOff[i] = totalNear;
+    totalNear += nearList[i].length;
+    vFaceOff[i] = totalFace;
+    totalFace += faceList[i].length;
+  }
+  vNearOff[n] = totalNear;
+  vFaceOff[n] = totalFace;
+  const vNear = new Uint32Array(totalNear), vFace = new Uint32Array(totalFace);
+  for (let i = 0; i < n; i++) {
+    vNear.set(nearList[i], vNearOff[i]);
+    vFace.set(faceList[i], vFaceOff[i]);
+  }
+
+  const nSub = n + nq + ne;
+  const nqSub = 4 * nq;
+  const quads = new Uint32Array(4 * nqSub);
+  for (let f = 0; f < nq; f++) {
+    const fv = n + f;
+    for (let j = 0; j < 4; j++) {
+      const v = Q[4 * f + j];
+      const eNext = n + nq + quadEdges[4 * f + j];
+      const ePrev = n + nq + quadEdges[4 * f + ((j + 3) % 4)];
+      const o = 4 * (4 * f + j);
+      quads[o] = v;
+      quads[o + 1] = eNext;
+      quads[o + 2] = fv;
+      quads[o + 3] = ePrev;
+    }
+  }
+  const N = 6 * nqSub;
+  const corner = new Uint32Array(N);
+  const QC = new Float32Array(2 * N);
+  const AT = [[0, 0], [1, 0], [1, 1], [0, 0], [1, 1], [0, 1]];
+  for (let f = 0; f < nqSub; f++) {
+    [0, 1, 2, 0, 2, 3].forEach((c, j) => {
+      corner[6 * f + j] = quads[4 * f + c];
+      QC.set(AT[j], 2 * (6 * f + j));
+    });
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(3 * N), 3).setUsage(THREE.DynamicDrawUsage));
+  geo.setAttribute("normal", new THREE.BufferAttribute(new Float32Array(3 * N), 3).setUsage(THREE.DynamicDrawUsage));
+  geo.setAttribute("q", new THREE.BufferAttribute(QC, 2));
+  geo.setAttribute("heat", new THREE.BufferAttribute(new Float32Array(N), 1).setUsage(THREE.DynamicDrawUsage));
+  geo.setAttribute("tint", new THREE.BufferAttribute(new Float32Array(3 * N), 3));
+  geo.setAttribute("tone", new THREE.BufferAttribute(new Float32Array(N), 1));
+  return { n, nq, ne, nSub, nqSub, eA, eB, eF0, eF1, vNearOff, vNear, vFaceOff, vFace, vOpen0, vOpen1, quads, corner, pos: new Float32Array(3 * nSub), norm: new Float32Array(3 * nSub), geo };
+}
+
+/** evaluate Catmull-Clark stencil on a flat `stride`-component array (1 for tone, 3 for xyz/tint) */
+function evalSubdiv(s: SubdivCache, Q: Uint32Array, src: ArrayLike<number>, stride: number, out: Float32Array): void {
+  const { n, nq, ne, eA, eB, eF0, eF1, vNearOff, vNear, vFaceOff, vFace, vOpen0, vOpen1 } = s;
+  // 1. Face points
+  for (let f = 0; f < nq; f++) {
+    const a = Q[4 * f] * stride, b = Q[4 * f + 1] * stride, c = Q[4 * f + 2] * stride, d = Q[4 * f + 3] * stride;
+    const o = (n + f) * stride;
+    for (let k = 0; k < stride; k++) out[o + k] = 0.25 * (src[a + k] + src[b + k] + src[c + k] + src[d + k]);
+  }
+  // 2. Edge points
+  for (let ei = 0; ei < ne; ei++) {
+    const a = eA[ei] * stride, b = eB[ei] * stride, o = (n + nq + ei) * stride;
+    if (eF1[ei] >= 0) {
+      const f0 = (n + eF0[ei]) * stride, f1 = (n + eF1[ei]) * stride;
+      for (let k = 0; k < stride; k++) out[o + k] = 0.25 * (src[a + k] + src[b + k] + out[f0 + k] + out[f1 + k]);
+    } else {
+      for (let k = 0; k < stride; k++) out[o + k] = 0.5 * (src[a + k] + src[b + k]);
+    }
+  }
+  // 3. Original vertices
+  for (let v = 0; v < n; v++) {
+    const o = v * stride;
+    if (vOpen0[v] >= 0) {
+      const a = vOpen0[v] * stride, b = (vOpen1[v] >= 0 ? vOpen1[v] : vOpen0[v]) * stride;
+      for (let k = 0; k < stride; k++) out[o + k] = 0.75 * src[o + k] + 0.125 * (src[a + k] + src[b + k]);
+      continue;
+    }
+    const n0 = vNearOff[v], n1 = vNearOff[v + 1], kVal = n1 - n0;
+    const f0 = vFaceOff[v], f1 = vFaceOff[v + 1], nf = f1 - f0;
+    if (kVal === 0 || nf === 0) {
+      for (let c = 0; c < stride; c++) out[o + c] = src[o + c];
+      continue;
+    }
+    const invK = 1 / kVal, invK2 = invK * invK, invKF = invK / nf;
+    const selfW = (kVal - 3) * invK + kVal * invK2;
+    for (let c = 0; c < stride; c++) {
+      let acc = selfW * src[o + c];
+      for (let j = n0; j < n1; j++) acc += invK2 * src[vNear[j] * stride + c];
+      for (let j = f0; j < f1; j++) acc += invKF * out[(n + vFace[j]) * stride + c];
+      out[o + c] = acc;
+    }
+  }
+}
+
+function quadNormals(n: number, nq: number, Q: Uint32Array, P: Float32Array, out: Float32Array): void {
+  out.fill(0);
+  for (let f = 0; f < nq; f++) {
+    const a = 3 * Q[4 * f], b = 3 * Q[4 * f + 1], c = 3 * Q[4 * f + 2], d = 3 * Q[4 * f + 3];
+    const ux = P[c] - P[a], uy = P[c + 1] - P[a + 1], uz = P[c + 2] - P[a + 2];
+    const vx = P[d] - P[b], vy = P[d + 1] - P[b + 1], vz = P[d + 2] - P[b + 2];
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    out[a] += nx; out[a + 1] += ny; out[a + 2] += nz;
+    out[b] += nx; out[b + 1] += ny; out[b + 2] += nz;
+    out[c] += nx; out[c + 1] += ny; out[c + 2] += nz;
+    out[d] += nx; out[d + 1] += ny; out[d + 2] += nz;
+  }
+  for (let i = 0; i < n; i++) {
+    const o = 3 * i, l = Math.hypot(out[o], out[o + 1], out[o + 2]) || 1;
+    out[o] /= l; out[o + 1] /= l; out[o + 2] /= l;
+  }
+}
 
 export class RigView {
   readonly group = new THREE.Group();
@@ -97,6 +287,9 @@ export class RigView {
   private readonly joints: THREE.Points;
   /** each corner's vertex */
   private readonly corner: Uint32Array;
+  private sub: SubdivCache | null = null;
+  private subdivLevel: 0 | 1 = 0;
+  private lastWeightBone = -1;
 
   constructor(readonly rig: Rig) {
     const nq = rig.nq, N = 6 * nq;
@@ -169,10 +362,30 @@ export class RigView {
   set alpha(a: number) {
     for (const m of [this.mat, this.backMat]) m.uniforms.uAlpha.value = a;
   }
+  /** 0: base mesh; 1: real-time 4× Catmull-Clark subdivision for smooth high-polygon curves */
+  get subdivide(): 0 | 1 {
+    return this.subdivLevel;
+  }
+  set subdivide(level: 0 | 1) {
+    if (level === this.subdivLevel) return;
+    this.subdivLevel = level;
+    if (level === 1 && !this.sub) {
+      this.sub = buildSubdiv(this.rig);
+      this.toneChanged();
+      this.weightsOf(this.lastWeightBone);
+    }
+    const g = level === 1 ? this.sub!.geo : this.geo;
+    this.front.geometry = this.back.geometry = g;
+  }
+  /** current rendered quad count (4× when subdivided) */
+  get quadCount(): number {
+    return this.subdivLevel === 1 && this.sub ? this.sub.nqSub : this.rig.nq;
+  }
 
   /** free the GPU's copies of its geometry and materials (take `group` out of the scene too) */
   dispose(): void {
     this.geo.dispose();
+    this.sub?.geo.dispose();
     for (const m of [this.mat, this.backMat]) m.dispose();
     for (const o of [this.bones, this.joints]) {
       o.geometry.dispose();
@@ -185,10 +398,18 @@ export class RigView {
     const T = this.geo.getAttribute("tone") as THREE.BufferAttribute, A = T.array as Float32Array;
     for (let c = 0; c < this.corner.length; c++) A[c] = this.rig.tone[this.corner[c]];
     T.needsUpdate = true;
+    if (this.sub) {
+      const subTone = new Float32Array(this.sub.nSub);
+      evalSubdiv(this.sub, this.rig.quads, this.rig.tone, 1, subTone);
+      const ST = this.sub.geo.getAttribute("tone") as THREE.BufferAttribute, SA = ST.array as Float32Array;
+      for (let c = 0; c < this.sub.corner.length; c++) SA[c] = subTone[this.sub.corner[c]];
+      ST.needsUpdate = true;
+    }
   }
 
   /** the weights view: every bone its own colour (bone < 0), or one bone's weight as brightness */
   weightsOf(bone: number): void {
+    this.lastWeightBone = bone;
     const rig = this.rig, T = this.geo.getAttribute("tint") as THREE.BufferAttribute, A = T.array as Float32Array;
     const hue = (b: number) => new THREE.Color().setHSL(((b * 0.61803) % 1 + 1) % 1, 0.85, 0.55);
     const cols = rig.bones.map((_, b) => hue(b));
@@ -210,26 +431,53 @@ export class RigView {
     }
     for (let c = 0; c < this.corner.length; c++) A.set(per.subarray(3 * this.corner[c], 3 * this.corner[c] + 3), 3 * c);
     T.needsUpdate = true;
+    if (this.sub) {
+      const subTint = new Float32Array(3 * this.sub.nSub);
+      evalSubdiv(this.sub, rig.quads, per, 3, subTint);
+      const ST = this.sub.geo.getAttribute("tint") as THREE.BufferAttribute, SA = ST.array as Float32Array;
+      for (let c = 0; c < this.sub.corner.length; c++) SA.set(subTint.subarray(3 * this.sub.corner[c], 3 * this.sub.corner[c] + 3), 3 * c);
+      ST.needsUpdate = true;
+    }
   }
 
   /** draw the mesh at `posed` (call after rig.skin into view.posed), with each quad's heat */
   update(heat?: Float32Array): void {
     const rig = this.rig, P = this.posed;
-    vertexNormals(rig, P, this.normals);
-    const gp = this.geo.getAttribute("position") as THREE.BufferAttribute, gn = this.geo.getAttribute("normal") as THREE.BufferAttribute, gh = this.geo.getAttribute("heat") as THREE.BufferAttribute;
-    const A = gp.array as Float32Array, NN = gn.array as Float32Array, HH = gh.array as Float32Array;
-    for (let c = 0; c < this.corner.length; c++) {
-      const v = 3 * this.corner[c];
-      A[3 * c] = P[v];
-      A[3 * c + 1] = P[v + 1];
-      A[3 * c + 2] = P[v + 2];
-      NN[3 * c] = this.normals[v];
-      NN[3 * c + 1] = this.normals[v + 1];
-      NN[3 * c + 2] = this.normals[v + 2];
-      if (heat) HH[c] = heat[Math.floor(c / 6)];
+    if (this.subdivLevel === 1 && this.sub) {
+      const s = this.sub;
+      evalSubdiv(s, rig.quads, P, 3, s.pos);
+      quadNormals(s.nSub, s.nqSub, s.quads, s.pos, s.norm);
+      const gp = s.geo.getAttribute("position") as THREE.BufferAttribute, gn = s.geo.getAttribute("normal") as THREE.BufferAttribute, gh = s.geo.getAttribute("heat") as THREE.BufferAttribute;
+      const A = gp.array as Float32Array, NN = gn.array as Float32Array, HH = gh.array as Float32Array;
+      for (let c = 0; c < s.corner.length; c++) {
+        const v = 3 * s.corner[c];
+        A[3 * c] = s.pos[v];
+        A[3 * c + 1] = s.pos[v + 1];
+        A[3 * c + 2] = s.pos[v + 2];
+        NN[3 * c] = s.norm[v];
+        NN[3 * c + 1] = s.norm[v + 1];
+        NN[3 * c + 2] = s.norm[v + 2];
+        if (heat) HH[c] = heat[Math.floor(c / 24)];
+      }
+      gp.needsUpdate = gn.needsUpdate = true;
+      if (heat) gh.needsUpdate = true;
+    } else {
+      vertexNormals(rig, P, this.normals);
+      const gp = this.geo.getAttribute("position") as THREE.BufferAttribute, gn = this.geo.getAttribute("normal") as THREE.BufferAttribute, gh = this.geo.getAttribute("heat") as THREE.BufferAttribute;
+      const A = gp.array as Float32Array, NN = gn.array as Float32Array, HH = gh.array as Float32Array;
+      for (let c = 0; c < this.corner.length; c++) {
+        const v = 3 * this.corner[c];
+        A[3 * c] = P[v];
+        A[3 * c + 1] = P[v + 1];
+        A[3 * c + 2] = P[v + 2];
+        NN[3 * c] = this.normals[v];
+        NN[3 * c + 1] = this.normals[v + 1];
+        NN[3 * c + 2] = this.normals[v + 2];
+        if (heat) HH[c] = heat[Math.floor(c / 6)];
+      }
+      gp.needsUpdate = gn.needsUpdate = true;
+      if (heat) gh.needsUpdate = true;
     }
-    gp.needsUpdate = gn.needsUpdate = true;
-    if (heat) gh.needsUpdate = true;
     // the skeleton
     const bp = this.bones.geometry.getAttribute("position") as THREE.BufferAttribute, jp = this.joints.geometry.getAttribute("position") as THREE.BufferAttribute;
     rig.bones.forEach((b, i) => {

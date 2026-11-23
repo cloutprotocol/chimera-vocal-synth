@@ -155,13 +155,28 @@ await addTarget(mhMuscle, "targets/armslegs/r-lowerleg-muscle-incr.target", 0.6)
 await addTarget(mhMuscle, "targets/stomach/stomach-tone-incr.target", 0.6);
 
 const mhBreast = mhFemale.map((p) => [...p] as V3);
-await addTarget(mhBreast, "targets/breast/female-young-averagemuscle-averageweight-maxcup-averagefirmness.target", 1.0);
+await addTarget(mhBreast, "targets/breast/female-young-averagemuscle-averageweight-maxcup-averagefirmness.target", 1.05);
+await addTarget(mhBreast, "targets/breast/female-young-averagemuscle-averageweight-maxcup-maxfirmness.target", 0.35);
 
 const mhButt = mhFemale.map((p) => [...p] as V3);
-await addTarget(mhButt, "targets/buttocks/buttocks-volume-incr.target", 1.35);
-
+await addTarget(mhButt, "targets/buttocks/buttocks-volume-incr.target", 1.55);
+// localized hip roundness for a lush, continuous hip-to-glute silhouette
+const hipWide = await targetMag("targets/hip/hip-scale-horiz-incr.target");
 const buttMag = await targetMag("targets/buttocks/buttocks-volume-incr.target");
 const bellyMag = await targetMag("targets/stomach/stomach-tone-decr.target");
+{
+  // Blend hip-scale-horiz-incr onto mhButt strictly around the buttocks/pelvis zone
+  const hipLines = (await get("targets/hip/hip-scale-horiz-incr.target")).split("\n");
+  for (const line of hipLines) {
+    if (!line || line.startsWith("#")) continue;
+    const [i, dx, dy, dz] = line.split(/\s+/).map(Number);
+    const local = Math.min(1, buttMag[i] / 0.8 + (hipWide[i] > 0.3 ? 0.35 : 0));
+    if (local <= 0) continue;
+    mhButt[i][0] += 0.45 * local * dx;
+    mhButt[i][1] += 0.45 * local * dy;
+    mhButt[i][2] += 0.45 * local * dz;
+  }
+}
 
 /** MakeHuman decimetres, facing +z with its left on +x → body cm */
 const cm = ([x, y, z]: V3): V3 => [z * 10, y * 10, -x * 10];
@@ -352,6 +367,82 @@ const baseT = new Float64Array(base.length * NT);
     const p = male[i];
     if (p[0] < hipMid[0] - 1) continue;
     baseT[i * NT + 4] = Math.min(1, bellyMag[i] / bellyNorm);
+  }
+
+  // Smooth anatomical volumetric rounding on mhBreast & mhButt (in MakeHuman dm: +z fwd, +y up, +x left)
+  // so enlarged breasts & booty read as lush, spherical and voluptuous rather than conical or flat.
+  for (const [ti, sideSign] of [[0, -1], [1, 1]] as const) {
+    // Weighted lobe centre in MakeHuman dm on mhBreast
+    let cx = 0, cy = 0, cz = 0, ws = 0;
+    let maxZ = -Infinity;
+    for (let i = 0; i < base.length; i++) {
+      const w = baseT[i * NT + ti];
+      if (w > 0.2) {
+        cx += w * mhBreast[i][0];
+        cy += w * mhBreast[i][1];
+        cz += w * mhBreast[i][2];
+        ws += w;
+        if (mhBreast[i][2] > maxZ) maxZ = mhBreast[i][2];
+      }
+    }
+    cx /= ws || 1;
+    cy /= ws || 1;
+    cz /= ws || 1;
+    // Broad hemispherical-teardrop rounding: fill out upper, lower, medial and lateral slopes
+    // while gently softening MakeHuman's pointed nipple apex so the silhouette is round and lush.
+    const lobeR = 0.88; // dm (~8.8 cm lobe radius)
+    const chestZ = cz - 0.55;
+    for (let i = 0; i < base.length; i++) {
+      const w = baseT[i * NT + ti];
+      if (w <= 0.01) continue;
+      const p = mhBreast[i];
+      const dx = p[0] - cx, dy = p[1] - (cy - 0.04);
+      const rLat = Math.hypot(dx, dy);
+      const u = Math.min(1, rLat / lobeR);
+      // Hemispherical dome profile: broad round shoulder around u=0.25..0.85, softly rounded cap at u=0
+      const dome = Math.sqrt(Math.max(0, 1 - u * u));
+      const sw = w * w * (3 - 2 * w);
+      const roundPush = 0.34 * dome * Math.pow(w, 0.55);
+      // Gently pull back the sharpest conical tip (u < 0.25) while swelling the surrounding dome
+      const tipSoften = Math.exp(-Math.pow(u / 0.22, 2)) * 0.16 * sw;
+      // Radial expansion in x/y makes the breast broad, plump and round (plus soft medial cleavage)
+      const invR = rLat > 1e-4 ? 1 / rLat : 0;
+      p[0] += dx * invR * 0.26 * Math.sin(u * Math.PI) * sw + sideSign * 0.06 * sw;
+      p[1] += dy * invR * 0.26 * Math.sin(u * Math.PI) * sw - 0.12 * sw;
+      // Forward projection: smooth full hemisphere from chest wall, no pointed cone
+      const fwdTarget = Math.max(0, (p[2] - chestZ) * 0.12) + roundPush - tipSoften;
+      p[2] += fwdTarget;
+    }
+  }
+  for (const [ti, sideSign] of [[2, -1], [3, 1]] as const) {
+    let cx = 0, cy = 0, cz = 0, ws = 0;
+    for (let i = 0; i < base.length; i++) {
+      const w = baseT[i * NT + ti];
+      if (w > 0.25) {
+        cx += w * mhButt[i][0];
+        cy += w * mhButt[i][1];
+        cz += w * mhButt[i][2];
+        ws += w;
+      }
+    }
+    cx /= ws || 1;
+    cy /= ws || 1;
+    cz /= ws || 1;
+    // Internal gluteal centre slightly anterior to skin so radial push rounds the posterior hemisphere
+    const dzIn = cz + 0.85;
+    for (let i = 0; i < base.length; i++) {
+      const w = baseT[i * NT + ti];
+      if (w <= 0.01) continue;
+      const p = mhButt[i];
+      const rx = p[0] - cx, ry = p[1] - cy, rz = p[2] - dzIn;
+      const r = Math.hypot(rx, ry, rz) || 1;
+      const sw = w * w * (3 - 2 * w);
+      const fullness = 0.44 * sw;
+      // Rounded posterior projection + lush lateral hip curve (keeping gluteal cleft crisp via w=0 at z=0)
+      p[0] += (rx / r) * fullness * 0.85 - sideSign * 0.08 * sw;
+      p[1] += (ry / r) * fullness * 0.65 + 0.04 * sw;
+      p[2] += (rz / r) * fullness * 1.15;
+    }
   }
 }
 
@@ -716,10 +807,17 @@ const neckEdges = new Set<number>();
 // The neck's strips are cut finer (the last two figures): the head's skin grows from the rim with
 // rows about as far apart as the rim's vertices, and the neck under it should not be coarser.
 const ASPECT = 1.25, MIN = 3.6, ASPECT_NECK = 0.8, MIN_NECK = 2.4;
+// Finer quad strips through the breast and buttocks regions so curves stay round and lush at high volume
+const ASPECT_CURVE = 0.65, MIN_CURVE = 1.9;
 {
   const n = V.length / D;
   const { edgeFaces } = topology(quads, n);
   const len = (a: number, b: number) => Math.hypot(V[a * D] - V[b * D], V[a * D + 1] - V[b * D + 1], V[a * D + 2] - V[b * D + 2]);
+  const isCurveEdge = (k: number) => {
+    const a = Math.floor(k / 1e6), b = k % 1e6;
+    for (const t of [0, 1, 2, 3]) if (V[a * D + OFF_T + t] > 0.25 || V[b * D + OFF_T + t] > 0.25) return true;
+    return false;
+  };
   const cut = new Map<number, number>();
   const seen = new Set<number>();
   let added = 0;
@@ -753,7 +851,14 @@ const ASPECT = 1.25, MIN = 3.6, ASPECT_NECK = 0.8, MIN_NECK = 2.4;
     }
     const H = edges.reduce((sum, k) => sum + len(Math.floor(k / 1e6), k % 1e6), 0) / edges.length, wide = side / Math.max(1, steps);
     const neck = edges.some((k) => neckEdges.has(k));
-    const pieces = Math.min(6, Math.max(1, Math.round(H / Math.max(wide * (neck ? ASPECT_NECK : ASPECT), neck ? MIN_NECK : MIN))));
+    const curve = !neck && edges.some(isCurveEdge);
+    const aspect = neck ? ASPECT_NECK : curve ? ASPECT_CURVE : ASPECT;
+    const minLen = neck ? MIN_NECK : curve ? MIN_CURVE : MIN;
+    let pieces = Math.min(6, Math.max(1, Math.round(H / Math.max(wide * aspect, minLen))));
+    // Never change the neck rim vertex count (open boundary stays 36 verts for head fitting)
+    const touchesRim = edges.some((k) => edgeFaces.get(k)!.length === 1);
+    if (curve && !touchesRim) pieces = Math.max(2, pieces);
+    if (touchesRim) pieces = 1;
     if (process.env.DBG && neck) console.log(`  neck strip of ${edges.length}: ${H.toFixed(1)} cm long (${Math.min(...edges.map((k) => len(Math.floor(k / 1e6), k % 1e6))).toFixed(1)} to ${Math.max(...edges.map((k) => len(Math.floor(k / 1e6), k % 1e6))).toFixed(1)}), ${wide.toFixed(1)} wide → ${pieces}`);
     if (pieces > 1) {
       for (const k of edges) cut.set(k, pieces - 1);

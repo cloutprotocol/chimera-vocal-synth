@@ -139,26 +139,27 @@ export class SoftTissue {
     const name = r.def.name;
 
     if (name === "breastL" || name === "breastR") {
-      // Breasts: minimal on lean male chest; full natural breast dynamics on female / large cup / higher fat.
-      // Biomechanical breast natural frequency ~2.3–3.9 Hz (lower with larger mass & higher fat).
-      const volume = female * (0.55 + 0.85 * breast) + 0.14 * (1 - female) * (fat + 1.4 * breast) + 0.35 * fat * female;
-      const compliance = Math.min(1.6, volume * (1 - 0.18 * muscle)) * jig;
-      const freq = Math.max(2.1, 3.85 - 0.95 * breast - 0.45 * fat + 0.3 * muscle);
-      const zeta = Math.max(0.16, 0.34 - 0.08 * breast - 0.06 * fat + 0.08 * muscle);
-      const maxDisp = (0.75 + 2.5 * Math.min(1.4, volume)) * Math.min(1.4, Math.sqrt(Math.max(0.1, jig)));
-      return { freq, zeta, maxDisp, maxInward: 0.75, sagGain: 0.42 * Math.min(1.4, volume), compliance, outwardX: 1 };
+      // Breasts: works independently on both female and male! Quiet on lean male with breast=0;
+      // full natural breast dynamics whenever female or breast volume is raised.
+      const baseFemale = female * (0.45 + 0.3 * fat);
+      const volume = baseFemale + 0.95 * breast + 0.16 * fat * (1 - female) * Math.min(1, fat);
+      const compliance = Math.min(1.65, volume * (1 - 0.16 * muscle)) * jig;
+      const freq = Math.max(2.0, 3.85 - 0.95 * breast - 0.45 * fat + 0.28 * muscle);
+      const zeta = Math.max(0.15, 0.33 - 0.08 * breast - 0.06 * fat + 0.08 * muscle);
+      const maxDisp = (0.75 + 2.75 * Math.min(1.5, volume)) * Math.min(1.45, Math.sqrt(Math.max(0.1, jig)));
+      return { freq, zeta, maxDisp, maxInward: 0.75, sagGain: 0.44 * Math.min(1.5, volume), compliance, outwardX: 1 };
     }
 
     if (name === "buttL" || name === "buttR") {
-      // Gluteal soft tissue: active on both sexes, heightened with butt volume, body fat, and female pelvis;
+      // Gluteal soft tissue: independent on both sexes, scaling smoothly with butt volume and fat;
       // firmer and higher-frequency with stronger gluteal muscle tone.
-      const volume = 0.32 + 0.75 * butt + 0.65 * fat + 0.25 * female;
-      const tone = 1 - 0.28 * muscle;
-      const compliance = Math.min(1.5, volume * tone) * jig;
-      const freq = Math.max(2.6, 4.35 - 0.65 * butt - 0.7 * fat + 0.55 * muscle);
-      const zeta = Math.max(0.18, 0.36 - 0.06 * fat - 0.04 * butt + 0.09 * muscle);
-      const maxDisp = (0.65 + 1.85 * Math.min(1.3, volume * tone)) * Math.min(1.4, Math.sqrt(Math.max(0.1, jig)));
-      return { freq, zeta, maxDisp, maxInward: 0.65, sagGain: 0.2 * Math.min(1.3, volume * tone), compliance, outwardX: -1 };
+      const volume = 0.28 + 0.9 * butt + 0.65 * fat + 0.18 * female;
+      const tone = 1 - 0.26 * muscle;
+      const compliance = Math.min(1.6, volume * tone) * jig;
+      const freq = Math.max(2.4, 4.35 - 0.72 * butt - 0.68 * fat + 0.52 * muscle);
+      const zeta = Math.max(0.17, 0.35 - 0.06 * fat - 0.05 * butt + 0.09 * muscle);
+      const maxDisp = (0.65 + 2.2 * Math.min(1.45, volume * tone)) * Math.min(1.45, Math.sqrt(Math.max(0.1, jig)));
+      return { freq, zeta, maxDisp, maxInward: 0.65, sagGain: 0.24 * Math.min(1.45, volume * tone), compliance, outwardX: -1 };
     }
 
     // Belly adipose pad: dormant when lean, soft sway & bounce when fat is raised
