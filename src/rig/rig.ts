@@ -23,7 +23,7 @@
  * (bind) pose is the mesh's (an A pose), and every bone's transform is from rest: x' = S x + t.
  */
 import * as THREE from "three";
-import type { Arm, Leg, Pose } from "./pose.ts";
+import { pose as poseOf, type Arm, type Leg, type Pose } from "./pose.ts";
 
 export interface BoneDef {
   name: string;
@@ -623,6 +623,64 @@ export function vertexNormals(rig: Rig, P: Float32Array<ArrayBufferLike>, out: F
     out[3 * i + 2] /= l;
   }
   return out;
+}
+
+/**
+ * How far out to the side (degrees) the hanging arms have to be held for the forearms and hands
+ * to clear the trunk and thighs, as the body is shaped now. At anatomical zero they don't: a hand
+ * hangs 3 cm inside the thigh on the file's body, 6 cm on one with wide hips. The rig is posed to
+ * find it (and left standing with its arms that far out): the angle is halved until every forearm
+ * and hand vertex is `gap` cm or more in front of the body's skin nearest it (a hand just touching
+ * the thigh reads as one sunk into it, in lines you can see through).
+ */
+export function armClearance(rig: Rig, gap = 1): number {
+  const INF = rig.INF;
+  const arm: number[][] = [[], []], body: number[][] = [[], []];
+  for (let i = 0; i < rig.bodyVertices; i++) {
+    let most = 0, bone = 0;
+    for (let j = 0; j < INF; j++) {
+      if (rig.skinWeight[INF * i + j] > most) {
+        most = rig.skinWeight[INF * i + j];
+        bone = rig.skinIndex[INF * i + j];
+      }
+    }
+    const name = rig.bones[bone].name, side = name.endsWith(".L") ? 1 : 0;
+    if (/^(forearm|forearm2|hand)\./.test(name)) arm[side].push(i);
+    else if (/^(hips|spine|chest|upperchest)/.test(name)) body[0].push(i), body[1].push(i);
+    else if (/^(pelvis|thigh|thigh2|hipHelper|hipFront)\./.test(name)) body[side].push(i);
+  }
+  const P = new Float32Array(3 * rig.n), N = new Float32Array(3 * rig.n);
+  /** how far the nearest forearm or hand vertex is in front of the body's skin (negative: behind it), arms out by `deg` */
+  const clear = (deg: number): number => {
+    rig.pose(poseOf({ bothArms: { raise: deg } }));
+    rig.skin(P);
+    vertexNormals(rig, P, N);
+    let least = Infinity;
+    for (const side of [0, 1]) {
+      for (const i of arm[side]) {
+        let best = 36, at = -1;
+        for (const q of body[side]) {
+          const d = (P[3 * i] - P[3 * q]) ** 2 + (P[3 * i + 1] - P[3 * q + 1]) ** 2 + (P[3 * i + 2] - P[3 * q + 2]) ** 2;
+          if (d < best) {
+            best = d;
+            at = q;
+          }
+        }
+        if (at < 0) continue;
+        least = Math.min(least, (P[3 * i] - P[3 * at]) * N[3 * at] + (P[3 * i + 1] - P[3 * at + 1]) * N[3 * at + 1] + (P[3 * i + 2] - P[3 * at + 2]) * N[3 * at + 2]);
+      }
+    }
+    return least;
+  };
+  if (clear(0) >= gap) return 0;
+  let lo = 0, hi = 40;
+  for (let k = 0; k < 7; k++) {
+    const mid = (lo + hi) / 2;
+    if (clear(mid) >= gap) hi = mid;
+    else lo = mid;
+  }
+  clear(hi);
+  return hi;
 }
 
 /**

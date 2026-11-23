@@ -13,6 +13,7 @@ import type { Pose } from "../src/rig/pose.ts";
 type Mods = {
   Rig: typeof import("../src/rig/rig.ts").Rig;
   vertexNormals: typeof import("../src/rig/rig.ts").vertexNormals;
+  armClearance: typeof import("../src/rig/rig.ts").armClearance;
   motion: typeof import("../src/rig/motion.ts");
   pose: typeof import("../src/rig/pose.ts");
   head: typeof import("../src/rig/head.ts");
@@ -43,7 +44,7 @@ beforeAll(async () => {
     import("../src/rig/muscles.ts"),
     import("../src/rig/walk.ts"),
   ]);
-  M = { Rig: rig.Rig, vertexNormals: rig.vertexNormals, motion, pose, head, view, physics, maleAnatomy, muscles, walk, VoiceModel: analysis.VoiceModel, BODIES: body.PRESETS, REST_ARTIC: a3d.REST_ARTIC };
+  M = { Rig: rig.Rig, vertexNormals: rig.vertexNormals, armClearance: rig.armClearance, motion, pose, head, view, physics, maleAnatomy, muscles, walk, VoiceModel: analysis.VoiceModel, BODIES: body.PRESETS, REST_ARTIC: a3d.REST_ARTIC };
 });
 
 function loadRig(): RigT {
@@ -672,6 +673,41 @@ describe("the shaped body and the rest of the rig", () => {
     "male, muscular": { female: 0, fat: 0.08, muscle: 1.15, breast: 0, butt: 0.45 },
     "male, heavy": { female: 0, fat: 0.95, muscle: 0.3, breast: 0.15, butt: 0.65 },
   };
+  /** how far (cm) the deepest forearm or hand vertex is behind the skin of the trunk and thighs nearest it */
+  function sunk(rig: RigT, P: Float32Array, N: Float32Array): number {
+    const INF = rig.INF;
+    const bone = (i: number) => {
+      let most = 0, at = 0;
+      for (let j = 0; j < INF; j++) {
+        if (rig.skinWeight[INF * i + j] > most) {
+          most = rig.skinWeight[INF * i + j];
+          at = rig.skinIndex[INF * i + j];
+        }
+      }
+      return rig.bones[at].name;
+    };
+    let deepest = 0;
+    for (const s of ["R", "L"]) {
+      const arm: number[] = [], body: number[] = [];
+      for (let i = 0; i < rig.bodyVertices; i++) {
+        const n = bone(i);
+        if ([`forearm.${s}`, `forearm2.${s}`, `hand.${s}`].includes(n)) arm.push(i);
+        else if (/^(hips|spine|chest|upperchest)/.test(n) || [`pelvis.${s}`, `thigh.${s}`, `thigh2.${s}`, `hipHelper.${s}`, `hipFront.${s}`].includes(n)) body.push(i);
+      }
+      for (const i of arm) {
+        let best = 36, q = -1;
+        for (const b of body) {
+          const d = at(P, i).distanceToSquared(at(P, b));
+          if (d < best) {
+            best = d;
+            q = b;
+          }
+        }
+        if (q >= 0) deepest = Math.max(deepest, -at(P, i).sub(at(P, q)).dot(at(N, q)));
+      }
+    }
+    return deepest;
+  }
 
   test("with no anatomy set the body is the one from before there was any, byte for byte (a third taken as a weight, not a division, put one midline vertex on another triangle, 0.56 cm off)", () => {
     const b = readFileSync(new URL("../src/rig/body.rig.bin", import.meta.url));
@@ -714,6 +750,40 @@ describe("the shaped body and the rest of the rig", () => {
     rig.pose(M.pose.PRESETS.neutral);
     for (let k = 0; k < 240; k++) tissue.step(1 / 60);
     for (const r of tissue.regions) expect([r.def.name, r.magnitude < 0.01]).toEqual([r.def.name, true]);
+  });
+
+  test("hanging arms clear every body, standing and through each gait (a hand hung 3 cm inside the file's thigh and 6 inside a wide hip; the walk turned the upper arm in, the hand into the thigh)", () => {
+    for (const [name, shape] of Object.entries(SHAPES)) {
+      const rig = loadRig();
+      rig.setAnatomy(shape);
+      const P = new Float32Array(3 * rig.n), N = new Float32Array(3 * rig.n);
+      const deep = (p: Pose) => {
+        rig.pose(p);
+        rig.skin(P);
+        M.vertexNormals(rig, P, N);
+        return sunk(rig, P, N);
+      };
+      // anatomical zero itself is left as it is, hands in the thighs
+      expect([name, deep(M.pose.PRESETS.neutral) > 2]).toEqual([name, true]);
+      const out = M.armClearance(rig);
+      expect([name, out > 2 && out < 20]).toEqual([name, true]);
+      expect([name, "standing", deep(M.pose.armsOut(M.pose.PRESETS.neutral, out)) < 0.5]).toEqual([name, "standing", true]);
+      for (const style of M.walk.GAIT_STYLES) {
+        let worst = 0;
+        // 4 s: more than a cycle of each
+        for (let f = 0; f < 96; f++) worst = Math.max(worst, deep(M.walk.walkFrame(f / 24, style, rig.anatomy, 1, out).pose));
+        expect([name, style, worst < 0.5]).toEqual([name, style, true]);
+      }
+    }
+    // an arm already further out, or raised, is left where it is
+    const { PRESETS, armsOut } = M.pose;
+    for (const p of Object.values(PRESETS)) {
+      for (const s of ["R", "L"] as const) {
+        const a = p.arms[s], b = armsOut(p, 8).arms[s];
+        if (a.raise >= 90 || a.raise * Math.cos((a.plane * Math.PI) / 180) >= 8) expect(b).toEqual(a);
+        else expect(b.raise * Math.cos((b.plane * Math.PI) / 180)).toBeCloseTo(8, 6);
+      }
+    }
   });
 
   test("a clip from another tool lands on a shaped female body as it does on the file's", async () => {

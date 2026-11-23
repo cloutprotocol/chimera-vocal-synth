@@ -175,13 +175,16 @@ const CONFIGS: Record<GaitStyle, GaitConfig> = {
 
 /**
  * Evaluate a single frame of procedural walking/catwalk/jogging at `timeSec` seconds.
- * Adapts pelvic sway, step width, arm clearance and stride length smoothly to `anatomy`.
+ * Adapts pelvic sway, step width and stride length smoothly to `anatomy`. `armOut` is how far out
+ * (degrees) a hanging arm clears the body: the rig's own measure (rig.ts, `armClearance`); left
+ * out, a guess from the anatomy, which a wide hip can be wider than.
  */
 export function walkFrame(
   timeSec: number,
   style: GaitStyle = "walk",
   anatomy?: Partial<AnatomyParams>,
   speedScale = 1,
+  armOut?: number,
 ): WalkFrame {
   const cfg = CONFIGS[style];
   const female = anatomy?.female ?? 0;
@@ -197,7 +200,9 @@ export function walkFrame(
   const hipYaw = cfg.pelvisYaw * (0.85 + 0.32 * female);
   const hipSway = cfg.sway * (0.8 + 0.45 * female);
   const stepIn = cfg.stepIn - 2.0 * female + 1.5 * fat;
-  const armClear = 6.5 + 2.5 * female + 4.5 * fat;
+  // more than a hanging arm needs: the hips sway and list towards the hand as it passes (and a
+  // jog's bent arm brings the hand by nearer the hip)
+  const armClear = (armOut ?? 4 + 4 * female + 5 * fat) + (cfg.jog ? 8 : 4);
 
   const evalLeg = (u: number): Leg => {
     const flex = samplePeriodic(cfg.jog ? JOG_HIP : WALK_HIP, u);
@@ -221,7 +226,9 @@ export function walkFrame(
     // Elbow bends more on forward swing, straightens slightly on back swing
     const elbow = Math.max(4, cfg.elbowBase + cfg.elbowAmp * Math.max(0, Math.cos(2 * Math.PI * uLegOpposite - 0.35)));
     const turn = cfg.jog ? 35 : 18 + 8 * Math.cos(2 * Math.PI * uLegOpposite);
-    const rotate = cfg.jog ? -18 : -10 - 6 * Math.cos(2 * Math.PI * uLegOpposite);
+    // the upper arm isn't turned in: with the elbow bent that carried the hand into the thigh at
+    // mid swing (4 cm on the walk, 6 on the jog)
+    const rotate = 0;
     const wrist = -4 + 5 * Math.sin(2 * Math.PI * uLegOpposite);
     return { shrug: 0, reach: 0, raise, plane, rotate, elbow, turn, wrist, deviate: 0 };
   };

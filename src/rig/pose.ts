@@ -113,6 +113,20 @@ export function pose(p: DeepPartial<Pose> & { bothArms?: Partial<Arm>; bothLegs?
   return n;
 }
 
+/**
+ * `p` with each arm at least `deg` out to the side where it hangs lower than level: a body's own
+ * clearance (rig.ts, `armClearance`), so the hands don't hang inside the hips. An arm already
+ * further out keeps its place, and what it has forward or back is kept.
+ */
+export function armsOut(p: Pose, deg: number): Pose {
+  const held = (a: Arm): Arm => {
+    const t = (a.plane * Math.PI) / 180, out = a.raise * Math.cos(t), swing = a.raise * Math.sin(t);
+    if (a.raise >= 90 || out >= deg) return a;
+    return { ...a, raise: Math.hypot(swing, deg), plane: (Math.atan2(swing, deg) * 180) / Math.PI };
+  };
+  return { ...p, arms: { R: held(p.arms.R), L: held(p.arms.L) } };
+}
+
 /** poses that test the rig: each joint near its limits, and whole-body poses that combine them */
 export const PRESETS: Record<string, Pose> = {
   neutral: neutral(),

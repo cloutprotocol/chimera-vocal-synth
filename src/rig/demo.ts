@@ -24,7 +24,7 @@ import type { RigView as RigViewT } from "./view.ts";
 import type { VoiceModel as VoiceModelT } from "../ui/analysis.ts";
 
 await initChimera();
-const [{ Rig, vertexNormals }, { PRESETS }, { wearHead, HEAD_LOOKS, HEAD_LOOK }, { RigView }, { VoiceModel }, { PRESETS: BODIES }, { REST_ARTIC }] = await Promise.all([
+const [{ Rig, vertexNormals, armClearance }, { PRESETS, armsOut }, { wearHead, HEAD_LOOKS, HEAD_LOOK }, { RigView }, { VoiceModel }, { PRESETS: BODIES }, { REST_ARTIC }] = await Promise.all([
   import("./rig.ts"),
   import("./pose.ts"),
   import("./head.ts"),
@@ -181,6 +181,14 @@ const applyViewMode = (mode: ViewMode) => {
   }
 };
 
+/** how far out the arms hang to clear this body (degrees): measured again whenever its shape
+ *  changes, once a dragged slider rests (it takes 20 ms, a frame and more on a phone) */
+let armOut = 0, armsDue: ReturnType<typeof setTimeout> | undefined;
+const fitArmsSoon = () => {
+  clearTimeout(armsDue);
+  armsDue = setTimeout(() => (armOut = armClearance(rig)), 150);
+};
+
 function buildCharacter(sex: "male" | "female", anatomy: AnatomyParams, keepCamera = false): void {
   if (view) {
     scene.remove(view.group, head.mount, muscles.group, maleGeo.group);
@@ -206,6 +214,7 @@ function buildCharacter(sex: "male" | "female", anatomy: AnatomyParams, keepCame
   skinned = new Float32Array(3 * rig.n);
   skinNormals = new Float32Array(3 * rig.n);
 
+  armOut = armClearance(rig);
   rig.pose(PRESETS.neutral);
   rig.skin(skinned);
   let minY = Infinity;
@@ -266,6 +275,7 @@ field("body").onchange = () => {
     buildCharacter(p.voice, p.anatomy, true);
   } else {
     rig.setAnatomy(p.anatomy);
+    armOut = armClearance(rig);
     tissue.settings.jiggle = p.jiggle;
     maleGeo.size = PENIS_SIZES[p.penis] ?? 0;
     maleGeo.jiggle = p.jiggle;
@@ -278,6 +288,7 @@ for (const name of ["fat", "muscle", "breast", "butt"] as const) {
   field(name).oninput = () => {
     syncSliderLabels();
     rig.setAnatomy(readAnatomy());
+    fitArmsSoon();
     syncMeshDetail();
   };
 }
@@ -374,13 +385,13 @@ renderer.setAnimationLoop((now) => {
     camera.position.add(move);
   } else if (GAIT_STYLES.includes(sel as GaitStyle)) {
     walkT += simDt;
-    const wf = walkFrame(walkT, sel as GaitStyle, rig.anatomy, speed);
+    const wf = walkFrame(walkT, sel as GaitStyle, rig.anatomy, speed, armOut);
     rig.pose(wf.pose);
     loads = wf.loads;
     floorScroll = (floorScroll + wf.speedCmPerSec * simDt) % GRID_STEP;
     floorGrid.position.x = -floorScroll;
   } else {
-    rig.pose(PRESETS[sel] ?? PRESETS.neutral);
+    rig.pose(armsOut(PRESETS[sel] ?? PRESETS.neutral, armOut));
   }
 
   controls.update();
