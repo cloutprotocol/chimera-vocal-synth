@@ -3,6 +3,7 @@
  * (the head is fitted to a VoiceModel), without a GPU.
  */
 import { beforeAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import * as THREE from "three";
 import { initEngine } from "./harness.ts";
@@ -658,5 +659,21 @@ describe("anatomy morphs, soft-tissue jiggle, muscles & walking gait", () => {
     expect(peakPenis).toBeGreaterThan(0.2);
     expect(peakPenis).toBeLessThan(6.0);
     maleGeo.dispose();
+  });
+});
+
+describe("the shaped body and the rest of the rig", () => {
+  test("with no anatomy set the body is the one from before there was any, byte for byte (a third taken as a weight, not a division, put one midline vertex on another triangle, 0.56 cm off)", () => {
+    const b = readFileSync(new URL("../src/rig/body.rig.bin", import.meta.url));
+    const len = b.readUInt32LE(0), h = JSON.parse(b.subarray(4, 4 + len).toString("utf8"));
+    expect([h.vertices, h.quads, h.bones.length, h.rim.length]).toEqual([2915, 2896, 43, 36]);
+    // the rest mesh, the skin's bones and weights, the quads: what main's file holds after its header
+    const core = b.subarray(4 + len, 4 + len + h.vertices * (12 + 3 * h.influences) + 8 * h.quads);
+    expect(createHash("sha256").update(core).digest("hex")).toBe("b811aa00cc27d71598cc5cc4bfd86b4cb94f82627fc168267145683249b3ffb2");
+    // and a rig nothing was asked of rests where the file has it
+    const plain = loadRig(), shaped = loadRig();
+    shaped.setAnatomy({ fat: 0.5, breast: 0.7 });
+    shaped.setAnatomy({ fat: 0, breast: 0 });
+    expect(maxMove(plain.rest, shaped.rest, Array(plain.bodyVertices).keys())).toBeLessThan(1e-4);
   });
 });

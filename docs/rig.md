@@ -83,6 +83,10 @@ is fitted to the model once.
   (the shoulder's cap and the hip turn half way with the limb; the elbow and knee swell as they
   bend). Embedded MakeHuman CC0 morph targets shape male/female proportions (with matching skeletal
   joints and neck rim), body fat, muscularity, breast cup volume and gluteal volume (`rig.setAnatomy`).
+  Every one at 0 is the body as it was before there were any, byte for byte (a test pins it), and
+  the bodies are adults: MakeHuman's "young" (adult) targets only, none of its child ones. The
+  breast is MakeHuman's largest cup between its average and firm shapes, the buttocks its volume
+  target a third past full with some of its wider hip: its artists' shapes, not ones made here.
 - **Soft-tissue physics (`src/rig/physics.ts`):** 3-DOF damped spring-mass oscillators on the
   breasts (`breastL`/`R`, from MPFB2's `breast.L`/`R` vertex groups), buttocks (`buttL`/`R`, from
   MakeHuman's buttocks volume target, split at the midline with ipsilateral thigh coupling) and
