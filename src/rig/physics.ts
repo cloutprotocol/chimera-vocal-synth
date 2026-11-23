@@ -4,13 +4,16 @@
  * adipose (`belly`).
  *
  * Each region tracks its parent bone's motion in world space (capturing vertical gait bounce,
- * lateral hip sway, pelvic list, thoracic counter-twist and abrupt stops), with static gravity
- * sag that loads and unloads dynamically on heel-strike and push-off. Displacements are constrained
- * in the parent bone's frame so tissue cannot sink into the ribcage or pelvis, and applied to the
- * skinned mesh with smooth falloff and subtle volume-preserving squash-and-stretch.
+ * lateral hip sway, pelvic list, thoracic counter-twist and abrupt stops). Displacements are
+ * constrained in the parent bone's frame so tissue cannot sink into the ribcage or pelvis, and
+ * applied to the skinned mesh with smooth falloff and subtle volume-preserving squash-and-stretch.
  *
- * Units: body cm, seconds (gravity 981 cm/s²). Stable under variable frame rates via 4 fixed
- * symplectic substeps per frame.
+ * At rest a region sits where the mesh has it: MakeHuman's shapes were drawn hanging under
+ * gravity already, so the spring adds no sag of its own (it once did, 1.6 cm on a full breast,
+ * and the whole breast slid down the chest into a ledge).
+ *
+ * Units: body cm, seconds. Stable under variable frame rates via 4 fixed symplectic substeps per
+ * frame.
  */
 import * as THREE from "three";
 import type { Rig, TissueDef } from "./rig.ts";
@@ -20,10 +23,8 @@ export interface SoftTissueSettings {
   enabled: boolean;
   /** overall jiggle amplitude / responsiveness (1: natural; 0: rigid; up to 2: lively) */
   jiggle: number;
-  /** downward acceleration in body cm/s² (981: Earth gravity) */
-  gravity: number;
 }
-export const SOFT_TISSUE_SETTINGS: Readonly<SoftTissueSettings> = { enabled: true, jiggle: 1.0, gravity: 981 };
+export const SOFT_TISSUE_SETTINGS: Readonly<SoftTissueSettings> = { enabled: true, jiggle: 1.0 };
 
 export interface TissueRegionState {
   readonly def: TissueDef;
@@ -40,8 +41,6 @@ export interface TissueRegionState {
   readonly dispWorld: THREE.Vector3;
   /** clamped displacement in parent-bone local frame (cm) */
   readonly dispLocal: THREE.Vector3;
-  /** static gravity sag at rest (cm, downward) */
-  sag: number;
   /** current displacement magnitude (cm) */
   magnitude: number;
   /** effective tissue softness/compliance factor (0..1+) */
@@ -93,7 +92,6 @@ export class SoftTissue {
         vel: new THREE.Vector3(),
         dispWorld: new THREE.Vector3(),
         dispLocal: new THREE.Vector3(),
-        sag: 0,
         magnitude: 0,
         compliance: 0,
         prevThighX: 0,
@@ -130,7 +128,6 @@ export class SoftTissue {
     zeta: number;
     maxDisp: number;
     maxInward: number;
-    sagGain: number;
     compliance: number;
     outwardX: number;
   } {
@@ -147,7 +144,7 @@ export class SoftTissue {
       const freq = Math.max(2.0, 3.85 - 0.95 * breast - 0.45 * fat + 0.28 * muscle);
       const zeta = Math.max(0.15, 0.33 - 0.08 * breast - 0.06 * fat + 0.08 * muscle);
       const maxDisp = (0.75 + 2.75 * Math.min(1.5, volume)) * Math.min(1.45, Math.sqrt(Math.max(0.1, jig)));
-      return { freq, zeta, maxDisp, maxInward: 0.75, sagGain: 0.44 * Math.min(1.5, volume), compliance, outwardX: 1 };
+      return { freq, zeta, maxDisp, maxInward: 0.75, compliance, outwardX: 1 };
     }
 
     if (name === "buttL" || name === "buttR") {
@@ -159,7 +156,7 @@ export class SoftTissue {
       const freq = Math.max(2.4, 4.35 - 0.72 * butt - 0.68 * fat + 0.52 * muscle);
       const zeta = Math.max(0.17, 0.35 - 0.06 * fat - 0.05 * butt + 0.09 * muscle);
       const maxDisp = (0.65 + 2.2 * Math.min(1.45, volume * tone)) * Math.min(1.45, Math.sqrt(Math.max(0.1, jig)));
-      return { freq, zeta, maxDisp, maxInward: 0.65, sagGain: 0.24 * Math.min(1.45, volume * tone), compliance, outwardX: -1 };
+      return { freq, zeta, maxDisp, maxInward: 0.65, compliance, outwardX: -1 };
     }
 
     // Belly adipose pad: dormant when lean, soft sway & bounce when fat is raised
@@ -168,7 +165,7 @@ export class SoftTissue {
     const freq = Math.max(2.2, 3.5 - 0.7 * fat + 0.4 * muscle);
     const zeta = Math.max(0.2, 0.38 - 0.08 * fat + 0.1 * muscle);
     const maxDisp = (0.4 + 2.2 * volume) * Math.min(1.3, Math.sqrt(Math.max(0.1, jig)));
-    return { freq, zeta, maxDisp, maxInward: 0.7, sagGain: 0.32 * volume, compliance, outwardX: 1 };
+    return { freq, zeta, maxDisp, maxInward: 0.7, compliance, outwardX: 1 };
   }
 
   /** current rest anchor point of a tissue region in body space (cm) */
@@ -217,15 +214,10 @@ export class SoftTissue {
       const omega = 2 * Math.PI * p.freq;
       const kSpring = omega * omega;
       const cDamp = 2 * p.zeta * omega;
-      // Static equilibrium sag under gravity: g_eff / omega^2, scaled by tissue softness
-      const gEff = this.settings.gravity * p.sagGain * Math.min(1.2, p.compliance);
-      const restSag = gEff / kSpring;
-      r.sag = restSag;
 
       // Seed cleanly on first frame or after a teleport (pose switch)
       if (!this.seeded || r.pos.distanceTo(r.target) > TELEPORT_CM) {
         r.pos.copy(r.target);
-        r.pos.y -= restSag;
         r.vel.set(0, 0, 0);
         if (r.def.name === "buttL" || r.def.name === "buttR") {
           const th = rig.bone(r.def.side < 0 ? "thigh.L" : "thigh.R");
@@ -250,7 +242,6 @@ export class SoftTissue {
         for (let s = 0; s < SUBSTEPS; s++) {
           this.vAcc.copy(r.target).sub(r.pos).multiplyScalar(kSpring);
           this.vAcc.addScaledVector(r.vel, -cDamp);
-          this.vAcc.y -= gEff;
           if (gluteKick) {
             this.vAcc.y += 0.35 * Math.abs(gluteKick);
             this.vAcc.x -= 0.25 * gluteKick;

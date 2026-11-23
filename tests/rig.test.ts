@@ -706,6 +706,16 @@ describe("the shaped body and the rest of the rig", () => {
     }
   });
 
+  test("standing still, the soft tissue stays where the mesh has it (a sag of its own slid a full breast 1.6 cm down the chest, into a ledge)", () => {
+    const rig = loadRig();
+    rig.setAnatomy(SHAPES["female, heavy"]);
+    const tissue = new M.physics.SoftTissue(rig);
+    tissue.settings.jiggle = 2;
+    rig.pose(M.pose.PRESETS.neutral);
+    for (let k = 0; k < 240; k++) tissue.step(1 / 60);
+    for (const r of tissue.regions) expect([r.def.name, r.magnitude < 0.01]).toEqual([r.def.name, true]);
+  });
+
   test("a clip from another tool lands on a shaped female body as it does on the file's", async () => {
     const { PRESETS } = M.pose, names = Object.keys(PRESETS);
     const frames = [...names.map((n) => PRESETS[n]), PRESETS.neutral];

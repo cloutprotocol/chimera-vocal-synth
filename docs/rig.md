@@ -93,8 +93,9 @@ is fitted to the model once.
 - **Soft-tissue physics (`src/rig/physics.ts`):** 3-DOF damped spring-mass oscillators on the
   breasts (`breastL`/`R`, from MPFB2's `breast.L`/`R` vertex groups), buttocks (`buttL`/`R`, from
   MakeHuman's buttocks volume target, split at the midline with ipsilateral thigh coupling) and
-  abdominal adipose (`belly`). Integrates in world space (4 symplectic substeps/frame) with static
-  gravity sag, anatomical inward collision clamping, and volume-preserving squash-and-stretch.
+  abdominal adipose (`belly`). Integrates in world space (4 symplectic substeps/frame) with
+  anatomical inward collision clamping and volume-preserving squash-and-stretch. Standing still,
+  a region stays where the mesh has it: the shapes were drawn hanging under gravity already.
 - **Muscle system (`src/rig/muscles.ts`):** 30 superficial anatomical muscles (15 bilateral pairs)
   anchored across the skeleton. Contraction combines kinematic shortening strain with optional
   weight-bearing gait loads (`MuscleLoads`), twitch-filtered (~45 ms attack / ~130 ms decay) to
