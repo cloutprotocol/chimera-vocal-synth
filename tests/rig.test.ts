@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import * as THREE from "three";
 import { initEngine } from "./harness.ts";
-import type { Rig as RigT } from "../src/rig/rig.ts";
+import type { AnatomyParams, Rig as RigT } from "../src/rig/rig.ts";
 import type { Pose } from "../src/rig/pose.ts";
 
 type Mods = {
@@ -663,6 +663,16 @@ describe("anatomy morphs, soft-tissue jiggle, muscles & walking gait", () => {
 });
 
 describe("the shaped body and the rest of the rig", () => {
+  /** bodies from slight to the sliders' far ends, of each sex */
+  const SHAPES: Record<string, Partial<AnatomyParams>> = {
+    "the file's": {},
+    "female, slight": { female: 1, fat: 0, muscle: 0.2, breast: 0, butt: 0 },
+    "female, full": { female: 1, fat: 0.15, muscle: 0.3, breast: 0.9, butt: 1 },
+    "female, heavy": { female: 1, fat: 0.8, muscle: 0.25, breast: 1, butt: 1 },
+    "male, muscular": { female: 0, fat: 0.08, muscle: 1.15, breast: 0, butt: 0.45 },
+    "male, heavy": { female: 0, fat: 0.95, muscle: 0.3, breast: 0.15, butt: 0.65 },
+  };
+
   test("with no anatomy set the body is the one from before there was any, byte for byte (a third taken as a weight, not a division, put one midline vertex on another triangle, 0.56 cm off)", () => {
     const b = readFileSync(new URL("../src/rig/body.rig.bin", import.meta.url));
     const len = b.readUInt32LE(0), h = JSON.parse(b.subarray(4, 4 + len).toString("utf8"));
@@ -675,5 +685,38 @@ describe("the shaped body and the rest of the rig", () => {
     shaped.setAnatomy({ fat: 0.5, breast: 0.7 });
     shaped.setAnatomy({ fat: 0, breast: 0 });
     expect(maxMove(plain.rest, shaped.rest, Array(plain.bodyVertices).keys())).toBeLessThan(1e-4);
+  });
+
+  test("a slider moved with the head on leaves the neck as the head fitted it (the rest mesh was rebuilt from the file's, and the rim sprang back 2 cm under the head); the sex then is refused", () => {
+    for (const sex of ["male", "female"] as const) {
+      const rig = loadRig();
+      rig.setAnatomy({ female: sex === "female" ? 1 : 0, fat: 0.35, muscle: 0.45, breast: 0.55, butt: 0.55 });
+      const model = new M.VoiceModel(M.BODIES[sex], 48000);
+      M.head.wearHead(rig, model);
+      const fitted = rig.rest.slice(), y = rig.header.rimShape.centre[1];
+      const neck = [...Array(rig.bodyVertices).keys()].filter((i) => fitted[3 * i + 1] > y - 1.5);
+      expect(neck.length).toBeGreaterThan(rig.rim.length);
+      rig.setAnatomy({ fat: 1, muscle: 0.1, breast: 1, butt: 1 });
+      expect([sex, maxMove(fitted, rig.rest, neck) < 1e-3]).toEqual([sex, true]);
+      // the body under it did take the shape
+      expect(maxMove(fitted, rig.rest, Array(rig.bodyVertices).keys())).toBeGreaterThan(1);
+      expect(() => rig.setAnatomy({ female: sex === "female" ? 0 : 1 })).toThrow("before wearHead");
+      expect(rig.anatomy.female).toBe(sex === "female" ? 1 : 0);
+      model.dispose();
+    }
+  });
+
+  test("a clip from another tool lands on a shaped female body as it does on the file's", async () => {
+    const { PRESETS } = M.pose, names = Object.keys(PRESETS);
+    const frames = [...names.map((n) => PRESETS[n]), PRESETS.neutral];
+    const src = loadRig(), dst = loadRig();
+    for (const rig of [src, dst]) rig.setAnatomy(SHAPES["female, full"]);
+    src.settings.thighTwist = 1;
+    const motion = await M.motion.Motion.load(dst, buffer(toBVH(src, PRESETS.neutral, frames, 90, 1 / 2.54)), "rig.bvh");
+    names.forEach((name, k) => {
+      src.pose(PRESETS[name]);
+      motion.pose(0.5 * k);
+      expect([name, jointsApart(src, dst, true).cm < 0.1, handsApart(src, dst) < 0.5]).toEqual([name, true, true]);
+    });
   });
 });

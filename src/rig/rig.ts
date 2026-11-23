@@ -128,8 +128,8 @@ export class Rig {
   readonly INF: number;
   /** rest positions (cm), n × 3 */
   rest: Float32Array;
-  /** unmorphed male body rest positions (cm), bodyVertices × 3 */
-  readonly baseRest: Float32Array;
+  /** what the anatomy has moved each body vertex by so far (cm), bodyVertices × 3 */
+  private readonly shaped: Float32Array;
   /** decoded morph target vertex deltas (cm), keyed by morph name */
   readonly morphs: Record<string, Float32Array> = {};
   /** decoded soft-tissue vertex weights (0..1), keyed by region name */
@@ -184,7 +184,7 @@ export class Rig {
     const n = (this.n = header.vertices), nq = (this.nq = header.quads), INF = (this.INF = header.influences);
     let o = 4 + len;
     this.rest = new Float32Array(buf.slice(o, o + 12 * n));
-    this.baseRest = this.rest.slice();
+    this.shaped = new Float32Array(3 * n);
     o += 12 * n;
     this.skinIndex = new Uint8Array(buf.slice(o, o + INF * n));
     o += INF * n;
@@ -236,8 +236,10 @@ export class Rig {
   /**
    * Shape the body's anatomy from the embedded MakeHuman morph targets (`female`, `fat`, `muscle`,
    * `breast`, `butt`). Changing `female` updates the skeleton's joint proportions and neck rim as
-   * well (call before `wearHead`, or recreate the rig and head when toggling sex). Body-shaping
-   * morphs (`fat`, `muscle`, `breast`, `butt`) fade to zero at the neck rim and update live.
+   * well, so it is set before `wearHead` (after it, it throws: make the rig and the head again).
+   * Body-shaping morphs (`fat`, `muscle`, `breast`, `butt`) fade to zero at the neck rim and update
+   * live, with the head on: only the change in shape is added to the rest mesh, so the neck stays
+   * as `wearHead` fitted it.
    */
   setAnatomy(params: Partial<AnatomyParams>): void {
     const a = this.header.anatomy;
@@ -252,6 +254,10 @@ export class Rig {
 
     const f = this.anatomy.female;
     const femaleChanged = Math.abs(f - prevFemale) > 1e-6;
+    if (femaleChanged && this.n > this.bodyVertices) {
+      this.anatomy.female = prevFemale;
+      throw new Error("setAnatomy: `female` moves the skeleton and the neck's rim, which the head was fitted to; set it before wearHead");
+    }
     const active: [Float32Array, number][] = [];
     for (const [k, w] of [
       ["female", this.anatomy.female],
@@ -263,10 +269,17 @@ export class Rig {
       if (w && this.morphs[k]) active.push([this.morphs[k], w]);
     }
     const len = 3 * this.bodyVertices;
-    const prev = this.corCache && !femaleChanged ? this.rest.subarray(0, len).slice() : null;
-    this.rest.set(this.baseRest, 0);
-    for (const [delta, w] of active) {
-      for (let i = 0; i < len; i++) this.rest[i] += w * delta[i];
+    // the rest mesh takes the change in shape, not the shape: wearHead has fitted the neck since
+    // (rebuilt from the file's mesh, the rim sprang back 2 cm under the head at the first slider).
+    // The cached centres of rotation go along with their vertices.
+    const cor = femaleChanged ? null : this.corCache;
+    for (let i = 0; i < len; i++) {
+      let to = 0;
+      for (const [delta, w] of active) to += w * delta[i];
+      const by = to - this.shaped[i];
+      this.rest[i] += by;
+      if (cor) cor[i] += by;
+      this.shaped[i] = to;
     }
     if (femaleChanged) {
       const mix = (u: number, v: number) => u + (v - u) * f;
@@ -292,12 +305,7 @@ export class Rig {
       const N = this.neutralTurns();
       for (let i = 0; i < this.B; i++) this.N[i].copy(N[i]);
       this.weightsChanged();
-    } else if (prev && this.corCache) {
-      // shift cached centres of rotation with the smooth surface morph (instant live slider feedback)
-      for (let i = 0; i < len; i++) this.corCache[i] += this.rest[i] - prev[i];
-    } else {
-      this.weightsChanged();
-    }
+    } else if (!cor) this.weightsChanged();
   }
 
   /** each vertex's neighbours and quads, and which are on an open edge */
