@@ -47,16 +47,6 @@ export interface AnatomyHeader {
   femalePoints: Record<string, number[]>;
   femaleRimShape: { centre: number[]; a: number; b: number };
   tissues: TissueDef[];
-  /** the detail mesh, as a change to the file's: how many vertices and quads it adds, and which of the file's vertices and quads it leaves out */
-  detail?: { vertices: number; quads: number; drop: number[]; cut: number[] };
-}
-export interface RigOptions {
-  /**
-   * The mesh with the breasts' own loops: rings of quads round each nipple in place of the plain
-   * grid's quads there (some sixteen to a breast, too few to be round). For a body that is to be
-   * shaped. It is a different mesh (more vertices, other quads), so it is chosen as the rig is made.
-   */
-  detail?: boolean;
 }
 export interface AnatomyParams {
   /** 0 = adult male, 1 = adult female (continuous morph + skeletal proportions) */
@@ -141,7 +131,7 @@ export class Rig {
   /** rest positions (cm), n × 3 */
   rest: Float32Array;
   /** what the anatomy has moved each body vertex by so far (cm), bodyVertices × 3 */
-  private shaped: Float32Array;
+  private readonly shaped: Float32Array;
   /** decoded morph target vertex deltas (cm), keyed by morph name */
   readonly morphs: Record<string, Float32Array> = {};
   /** decoded soft-tissue vertex weights (0..1), keyed by region name */
@@ -150,15 +140,13 @@ export class Rig {
   readonly tissueDefs: TissueDef[] = [];
   /** current anatomy morph weights */
   readonly anatomy: AnatomyParams = { ...ANATOMY_DEFAULT };
-  /** whether this is the detail mesh (`RigOptions.detail`) */
-  readonly detail: boolean;
   quads: Uint32Array;
   skinIndex: Uint8Array;
   skinWeight: Float32Array;
   /** each vertex's lines' brightness (1: the body's) */
   tone: Float32Array;
   /** how many of the vertices are the body's own (the rest were attached: a head's skin) */
-  bodyVertices: number;
+  readonly bodyVertices: number;
   readonly bones: BoneDef[];
   readonly B: number;
   readonly idx: Record<string, number>;
@@ -166,7 +154,7 @@ export class Rig {
   near: number[][] = [];
   /** each vertex's quads */
   quadsOf: number[][] = [];
-  rim: number[];
+  readonly rim: number[];
   /** vertices on an open edge (the neck's rim, or a head's lips) */
   open: Uint8Array = new Uint8Array(0);
   readonly settings: Settings = { ...SETTINGS };
@@ -191,7 +179,7 @@ export class Rig {
 
   private corCache: Float32Array | null = null;
 
-  constructor(buf: ArrayBuffer, options: RigOptions = {}) {
+  constructor(buf: ArrayBuffer) {
     const dv = new DataView(buf);
     const len = dv.getUint32(0, true);
     const header = (this.header = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, len))) as Header);
@@ -227,19 +215,16 @@ export class Rig {
         for (let i = 0; i < n; i++) w[i] = tRaw[base + i] / 255;
         this.tissues[td.name] = w;
       });
-      o += a.tissues.length * n;
     }
-    this.rim = header.rim;
-    this.detail = Boolean(options.detail);
-    if (this.detail) this.takeDetail(buf, o);
     this.bones = header.bones;
     this.maleBones = header.bones.map((b) => ({ head: [...b.head], tail: [...b.tail] }));
     this.malePoints = Object.fromEntries(Object.entries(header.points).map(([k, v]) => [k, [...v]]));
     this.maleRimShape = { centre: [...header.rimShape.centre], a: header.rimShape.a, b: header.rimShape.b };
     this.B = this.bones.length;
     this.idx = Object.fromEntries(this.bones.map((b, i) => [b.name, i]));
-    this.tone = new Float32Array(this.n).fill(1);
-    this.bodyVertices = this.n;
+    this.rim = header.rim;
+    this.tone = new Float32Array(n).fill(1);
+    this.bodyVertices = n;
     this.topology();
     this.H = this.bones.map((b) => new THREE.Vector3().fromArray(b.head));
     this.S = this.bones.map(() => new THREE.Quaternion());
@@ -326,55 +311,6 @@ export class Rig {
     } else if (!cor) this.weightsChanged();
   }
 
-  /**
-   * The file's mesh made into its detail mesh: the vertices and quads it leaves out dropped (the
-   * rest renumbered), the ones it adds read from `at` on, and every per-vertex array with them.
-   */
-  private takeDetail(buf: ArrayBuffer, at: number): void {
-    const a = this.header.anatomy, d = a?.detail;
-    if (!a || !d) throw new Error("this body has no detail mesh");
-    const n0 = this.n, m = d.vertices, INF = this.INF, pad4 = (x: number) => x + (x % 4 ? 4 - (x % 4) : 0);
-    let o = pad4(at);
-    const rest = new Float32Array(buf.slice(o, o + 12 * m));
-    o += 12 * m;
-    const skinIndex = new Uint8Array(buf.slice(o, o + INF * m));
-    o = pad4(o + INF * m);
-    const skinWeight = Float32Array.from(new Uint16Array(buf.slice(o, o + 2 * INF * m)), (w) => w / 65535);
-    o += 2 * INF * m;
-    const quads = new Uint16Array(buf.slice(o, o + 8 * d.quads));
-    o += 8 * d.quads;
-    const morphs = new Int16Array(buf.slice(o, o + 6 * a.morphNames.length * m));
-    o += 6 * a.morphNames.length * m;
-    const tissues = new Uint8Array(buf.slice(o, o + a.tissues.length * m));
-    // where each of the file's vertices goes (-1: dropped), the new ones after them
-    const gone = new Set(d.drop), to = new Int32Array(n0 + m).fill(-1);
-    let n = 0;
-    for (let i = 0; i < n0; i++) if (!gone.has(i)) to[i] = n++;
-    const kept = n;
-    for (let j = 0; j < m; j++) to[n0 + j] = n++;
-    /** a per-vertex array of `per` numbers carried over, the new vertices' from `more` */
-    const carry = <T extends Float32Array | Uint8Array>(old: T, more: ArrayLike<number>, per: number, moreAt = 0, scale = 1): T => {
-      const out = new (old.constructor as new (len: number) => T)(per * n);
-      for (let i = 0; i < n0; i++) if (to[i] >= 0) for (let k = 0; k < per; k++) out[per * to[i] + k] = old[per * i + k];
-      for (let j = 0; j < per * m; j++) out[per * kept + j] = more[moreAt + j] * scale;
-      return out;
-    };
-    this.rest = carry(this.rest, rest, 3);
-    this.skinIndex = carry(this.skinIndex, skinIndex, INF);
-    this.skinWeight = carry(this.skinWeight, skinWeight, INF);
-    a.morphNames.forEach((name, k) => (this.morphs[name] = carry(this.morphs[name], morphs, 3, 3 * m * k, a.morphScale)));
-    a.tissues.forEach((td, k) => (this.tissues[td.name] = carry(this.tissues[td.name], tissues, 1, m * k, 1 / 255)));
-    const cut = new Set(d.cut), Q: number[] = [];
-    for (let f = 0; f < this.nq; f++) if (!cut.has(f)) for (let j = 0; j < 4; j++) Q.push(to[this.quads[4 * f + j]]);
-    for (const v of quads) Q.push(to[v]);
-    if (Q.some((v) => v < 0)) throw new Error("the detail mesh uses a vertex it drops");
-    this.quads = Uint32Array.from(Q);
-    this.rim = this.rim.map((v) => to[v]);
-    this.shaped = new Float32Array(3 * n);
-    this.n = n;
-    this.nq = Q.length / 4;
-  }
-
   /** each vertex's neighbours and quads, and which are on an open edge */
   private topology(): void {
     const { n, nq } = this;
@@ -445,8 +381,8 @@ export class Rig {
     this.weightsChanged();
   }
 
-  static async load(url: string, options: RigOptions = {}): Promise<Rig> {
-    return new Rig(await (await fetch(url)).arrayBuffer(), options);
+  static async load(url: string): Promise<Rig> {
+    return new Rig(await (await fetch(url)).arrayBuffer());
   }
 
   bone(name: string): number {

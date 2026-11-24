@@ -126,7 +126,7 @@ for (const race of ["african", "asian", "caucasian"]) await addTarget(mhFemale, 
 // Morph target base meshes (in MakeHuman dm):
 // - fat: subcutaneous adipose fullness (universal maxweight + regional fat pads)
 // - muscle: athletic muscularity (universal maxmuscle + major superficial muscle groups)
-// - breast: bust cup volume (female maxcup, brought together and rounded at the slider's end)
+// - breast: bust cup volume (female maxcup - averagecup)
 // - butt: gluteal volume (buttocks-volume-incr)
 // - waist: the waist drawn in
 const mhFat = mh.map((p) => [...p] as V3);
@@ -158,13 +158,10 @@ await addTarget(mhMuscle, "targets/armslegs/r-lowerleg-muscle-incr.target", 0.6)
 await addTarget(mhMuscle, "targets/stomach/stomach-tone-incr.target", 0.6);
 
 const mhBreast = mhFemale.map((p) => [...p] as V3);
-// the largest cup MakeHuman's artists drew, in its firm shape, and the two brought half of the
-// way together by its own target (at 0.6 they run into each other at the slider's end). (With its average shape mixed in they sat wide of the chest's
-// middle and hung outward as they grew. The firm shape carried past the cup as drawn goes
-// flat-fronted on the plain mesh's few quads; relaxing it there made a cone of it on the detail
-// mesh, which has the quads to be round without.)
-await addTarget(mhBreast, "targets/breast/female-young-averagemuscle-averageweight-maxcup-maxfirmness.target", 1);
-await addTarget(mhBreast, "targets/breast/breast-dist-decr.target", 0.5);
+// the largest cup MakeHuman's artists drew, between its average and its firm shape: the two weights
+// sum to 1, as its own sliders mix them (past 1 the shape is extrapolated and stops being a breast)
+await addTarget(mhBreast, "targets/breast/female-young-averagemuscle-averageweight-maxcup-averagefirmness.target", 0.55);
+await addTarget(mhBreast, "targets/breast/female-young-averagemuscle-averageweight-maxcup-maxfirmness.target", 0.45);
 
 // MakeHuman's buttocks volume, a third past its full weight (its full weight is slight), and some
 // of its wider hip where the buttocks are, so the hip runs into them. (With the hips made deeper
@@ -959,255 +956,6 @@ const tissues = TISSUE_META.map((meta, t) => {
   return { ...meta, centerMale, centerFemale, radius };
 });
 
-// ------------------------------------------------------------------ the breasts' own loops (the detail mesh)
-// The proxy's chest is a plain grid, and a breast grows out of some sixteen of its quads: too few
-// to be round, and laid the wrong way to look it. A modeller rings a breast with loops round the
-// nipple. So, as an option the rig takes when it is made (`detail`), the quads under each breast
-// are replaced by a patch of rings: the patch's rim is the loop of the mesh's own vertices round
-// the quads taken out, each ring inside it has as many vertices as the rim, and the middle is
-// closed by a small grid (all quads, four poles of three edges). Every new vertex is a point on
-// a triangle of MakeHuman's dense mesh, so its place in each body and morph, its bones and its
-// tissue weights are that one point's: nothing is put back per shape. The mesh every reader gets
-// without the option is untouched: the patch is stored after it, as what to drop and what to add.
-/** how many rings, how far out the middle's grid reaches (of the way to the rim), how little the cup need move a quad for it to be the breast's (of its most), and how many times the inside is eased */
-const RINGS = 3, CAP = 0.5, SKIRT = 0.02, EASE = 4;
-const detail = (() => {
-  const BREAST = MORPH_NAMES.indexOf("breast"), cup = MORPH_CM[BREAST];
-  const at = (i: number, off: number): V3 => [V[i * D + off], V[i * D + off + 1], V[i * D + off + 2]];
-  const norm = (v: V3): V3 => {
-    const l = Math.hypot(...v) || 1;
-    return [v[0] / l, v[1] / l, v[2] / l];
-  };
-  const { edgeFaces } = topology(quads, n);
-  const rigN = normalsAt(quads, n, OFF_M);
-  const everyTri = Array.from({ length: baseTris.length / 3 }, (_, t) => 3 * t);
-  const rows: Float64Array[] = [], newQuads: number[][] = [], drop: number[] = [], cutQuads: number[] = [];
-  for (const side of [-1, 1]) {
-    // how far the cup moves the skin at most, and the rings' middle: the skin in front of the middle of
-    // what the cup adds (MakeHuman's nipple is above and outside that: rings round it crowd on one
-    // side of the breast and gape on the other)
-    let apex = -1, most = 0;
-    for (let v = 0; v < BODY; v++) if (side * female[v][2] > 0) most = Math.max(most, Math.hypot(...sub(cup[v], female[v])));
-    {
-      const mid: V3 = [0, 0, 0];
-      let sum = 0;
-      for (let v = 0; v < BODY; v++) {
-        if (side * female[v][2] <= 0) continue;
-        const w = Math.hypot(...sub(cup[v], female[v])) ** 2;
-        for (let k = 0; k < 3; k++) mid[k] += w * cup[v][k];
-        sum += w;
-      }
-      for (let k = 0; k < 3; k++) mid[k] /= sum;
-      // the skin in front of it
-      for (let v = 0; v < BODY; v++) {
-        if (side * female[v][2] <= 0 || Math.hypot(...sub(cup[v], female[v])) < 0.5 * most) continue;
-        const off = (u: number) => Math.hypot(cup[u][1] - mid[1], cup[u][2] - mid[2]);
-        if (apex < 0 || off(v) < off(apex)) apex = v;
-      }
-    }
-    // Seen from a point inside the chest behind the nipple, every part of the breast and of the
-    // skin round it lies in its own direction (looked at flat, from in front, the side of the
-    // ribs is edge on and the patch's rim runs off the picture). So a place on the skin is the
-    // direction it is seen in from there: how far round from the nipple's (the angle), and which way
-    const axis = norm(Array.from({ length: n }, (_, i) => i).filter((i) => side * V[i * D + OFF_M + 2] > 0.4 && Math.hypot(...sub(at(i, OFF_M + 3 * BREAST), at(i, OFF_M))) > 0.5 * most).reduce((s, i) => [s[0] + rigN[i][0], s[1] + rigN[i][1], s[2] + rigN[i][2]] as V3, [0, 0, 0] as V3));
-    const up = norm(sub([0, 1, 0], [axis[0] * axis[1], axis[1] * axis[1], axis[2] * axis[1]])), across = cross(up, axis);
-    const O = female[apex], DEPTH = 12, eye: V3 = [O[0] - DEPTH * axis[0], O[1] - DEPTH * axis[1], O[2] - DEPTH * axis[2]];
-    const flat = (p: V3): [number, number] => {
-      const d = norm(sub(p, eye)), ang = Math.acos(Math.max(-1, Math.min(1, dot(d, axis)))), l = Math.hypot(dot(d, across), dot(d, up)) || 1;
-      return [(ang * dot(d, across)) / l, (ang * dot(d, up)) / l];
-    };
-    // the quads to take out: those the cup moves at every corner, if only a little
-    const moved = (i: number) => side * V[i * D + OFF_M + 2] > 0.4 && Math.hypot(...sub(at(i, OFF_M + 3 * BREAST), at(i, OFF_M))) > SKIRT * most;
-    const out = new Set<number>();
-    quads.forEach((q, f) => {
-      if (q.every(moved)) out.add(f);
-    });
-    // the patch's outline made plain: a quad in a corner of it (two of its edges on quads taken out)
-    // goes too, and a quad that sticks out of it (one edge) stays, till neither is left. A notch or
-    // a spur in the rim is a place where it doubles back as seen from the nipple.
-    const sharedWith = (q: number[], f: number) => q.filter((v, j) => edgeFaces.get(edgeKey(v, q[(j + 1) % 4]))!.some((g) => g !== f && out.has(g))).length;
-    for (let changed = true; changed; ) {
-      changed = false;
-      quads.forEach((q, f) => {
-        const shared = sharedWith(q, f);
-        if (!out.has(f) && shared >= 3) {
-          out.add(f);
-          changed = true;
-        } else if (out.has(f) && shared <= 1) {
-          out.delete(f);
-          changed = true;
-        }
-      });
-    }
-    // the rim: the edges with a quad taken out on one side only, each the way that quad winds
-    const rimOfPatch = (): number[] => {
-      const next = new Map<number, number>();
-      for (const f of out) {
-        const q = quads[f];
-        for (let j = 0; j < 4; j++) {
-          const a = q[j], b = q[(j + 1) % 4];
-          if (edgeFaces.get(edgeKey(a, b))!.filter((g) => out.has(g)).length === 1) {
-            if (next.has(a)) throw new Error(`breast ${side}: the patch's rim meets itself at vertex ${a}`);
-            next.set(a, b);
-          }
-        }
-      }
-      const loop: number[] = [];
-      for (let v = next.keys().next().value as number; loop.length < next.size; v = next.get(v)!) loop.push(v);
-      if (new Set(loop).size !== next.size) throw new Error(`breast ${side}: the patch's rim is ${next.size} edges in more than one loop`);
-      return loop;
-    };
-    const rim = rimOfPatch();
-    const onRim = new Set(rim), inside = new Set<number>();
-    for (const f of out) for (const v of quads[f]) if (!onRim.has(v)) inside.add(v);
-    const B = rim.length;
-    // where the line of sight in the direction (u, v) first leaves the dense female mesh: a triangle, and the point's shares of its corners
-    const near = everyTri.filter((t) => Math.hypot(...sub(female[baseTris[t]], O)) < 45);
-    const hit = (u: number, v: number): { v: number[]; w: number[] } => {
-      const ang = Math.hypot(u, v), cu = ang ? u / ang : 0, cv = ang ? v / ang : 0;
-      const d: V3 = [0, 1, 2].map((k) => Math.cos(ang) * axis[k] + Math.sin(ang) * (cu * across[k] + cv * up[k])) as V3;
-      let best = Infinity, found: { v: number[]; w: number[] } | null = null;
-      for (const t of near) {
-        const a = female[baseTris[t]], b = female[baseTris[t + 1]], c = female[baseTris[t + 2]];
-        const e1 = sub(b, a), e2 = sub(c, a), nn = cross(e1, e2);
-        const facing = dot(nn, d);
-        if (facing <= 1e-9) continue;
-        const far = dot(sub(a, eye), nn) / facing;
-        if (far <= 0 || far >= best) continue;
-        const p = sub([eye[0] + far * d[0], eye[1] + far * d[1], eye[2] + far * d[2]], a);
-        const d11 = dot(e1, e1), d12 = dot(e1, e2), d22 = dot(e2, e2), p1 = dot(p, e1), p2 = dot(p, e2), den = d11 * d22 - d12 * d12;
-        const wb = (d22 * p1 - d12 * p2) / den, wc = (d11 * p2 - d12 * p1) / den;
-        if (wb < -1e-6 || wc < -1e-6 || wb + wc > 1 + 1e-6) continue;
-        best = far;
-        found = { v: [baseTris[t], baseTris[t + 1], baseTris[t + 2]], w: [1 - wb - wc, wb, wc] };
-      }
-      if (!found) throw new Error(`breast ${side}: nothing of the dense mesh in the direction (${u.toFixed(2)}, ${v.toFixed(2)})`);
-      return found;
-    };
-    const on = (mesh: V3[], h: { v: number[]; w: number[] }): V3 => [0, 1, 2].map((k) => h.w[0] * mesh[h.v[0]][k] + h.w[1] * mesh[h.v[1]][k] + h.w[2] * mesh[h.v[2]][k]) as V3;
-    if (Math.hypot(...sub(on(female, hit(0, 0)), O)) > 0.5) throw new Error(`breast ${side}: the point the patch is laid out from is not inside the chest`);
-    // the rim in the frame: how far out and which way round each of its vertices is
-    const rimAt = rim.map((i) => flat(at(i, OFF_M)));
-    const rimR = rimAt.map(([u, v]) => Math.hypot(u, v)), rimA = rimAt.map(([u, v]) => Math.atan2(v, u));
-    const turn = Math.sign(rimA.reduce((s, a, j) => s + Math.atan2(Math.sin(rimA[(j + 1) % B] - a), Math.cos(rimA[(j + 1) % B] - a)), 0));
-    rimA.forEach((a, j) => {
-      if (turn * Math.atan2(Math.sin(rimA[(j + 1) % B] - a), Math.cos(rimA[(j + 1) % B] - a)) <= 0) throw new Error(`breast ${side}: the rim doubles back as seen from the nipple, at vertex ${rim[j]}`);
-    });
-    const meanR = Math.min(...rimR);
-    // the rings come in from the rim's own outline to circles, and from its own spacing round to even
-    // (even from the turn that fits the rim's vertices best, or every spoke would bend the same way: a swirl)
-    const lead = rimA.map((a, j) => a - (turn * 2 * Math.PI * j) / B), phase = Math.atan2(lead.reduce((s, a) => s + Math.sin(a), 0), lead.reduce((s, a) => s + Math.cos(a), 0));
-    const even = rimA.map((_, j) => phase + (turn * 2 * Math.PI * j) / B);
-    // The rim is the mesh's own edges and has steps in it: where one of its edges runs straight out
-    // from the nipple, a ring that kept each vertex's own distance would cross it. So the rings
-    // come in from the rim's inner outline: at each vertex the least of its and its neighbours' distances, eased
-    let within = rimR.map((_, j) => Math.min(...[-2, -1, 0, 1, 2].map((k) => rimR[(j + k + B) % B])));
-    for (let pass = 0; pass < 2; pass++) within = within.map((r, j) => Math.min(r, (within[(j + B - 1) % B] + 2 * r + within[(j + 1) % B]) / 4));
-    const spoke = (j: number, rho: number): [number, number] => {
-      const w = smooth01((rho - CAP) / (1 - CAP));
-      const a = even[j] + w * Math.atan2(Math.sin(rimA[j] - even[j]), Math.cos(rimA[j] - even[j]));
-      const r = rho * (meanR + w * (within[j] - meanR));
-      return [r * Math.cos(a), r * Math.sin(a)];
-    };
-    // along each spoke the rings are evenly apart on the full cup's skin (even in the frame they would crowd where it stands out)
-    const FINE = 48;
-    const ringRho = rim.map((_, j) => {
-      const rho = Array.from({ length: FINE + 1 }, (_, k) => 1 - ((1 - CAP) * k) / FINE);
-      const pts = rho.map((r) => on(cup, hit(...spoke(j, r))));
-      const len = [0];
-      for (let k = 1; k <= FINE; k++) len.push(len[k - 1] + Math.hypot(...sub(pts[k], pts[k - 1])));
-      return Array.from({ length: RINGS + 1 }, (_, ring) => {
-        if (ring === 0 || ring === RINGS) return ring ? CAP : 1;
-        const want = (len[FINE] * ring) / RINGS;
-        let k = 0;
-        while (k < FINE - 1 && len[k + 1] < want) k++;
-        return rho[k] + ((rho[k + 1] - rho[k]) * (want - len[k])) / (len[k + 1] - len[k] || 1);
-      });
-    });
-    // and each ring's place is eased round the spokes, so a ring doesn't waver where its neighbours cross a fold
-    for (let pass = 0; pass < 4; pass++) {
-      const was = ringRho.map((r) => [...r]);
-      for (let j = 0; j < B; j++) for (let ring = 1; ring < RINGS; ring++) ringRho[j][ring] = (was[(j + B - 1) % B][ring] + 2 * was[j][ring] + was[(j + 1) % B][ring]) / 4;
-    }
-    const add = (h: { v: number[]; w: number[] }): number => {
-      const row = new Float64Array(D);
-      for (let c = 0; c < 3; c++) {
-        const v = h.v[c], w = h.w[c];
-        for (let k = 0; k < 3; k++) row[k] += w * male[v][k];
-        for (let b = 0; b < NB; b++) row[OFF_W + b] += w * baseW[v * NB + b];
-        for (let m = 0; m < NM; m++) for (let k = 0; k < 3; k++) row[OFF_M + 3 * m + k] += w * MORPH_CM[m][v][k];
-        for (let t = 0; t < NT; t++) row[OFF_T + t] += w * baseT[v * NT + t];
-      }
-      rows.push(row);
-      return n + rows.length - 1;
-    };
-    const rings: number[][] = [rim];
-    for (let ring = 1; ring <= RINGS; ring++) rings.push(rim.map((_, j) => add(hit(...spoke(j, ringRho[j][ring])))));
-    for (let ring = 0; ring < RINGS; ring++) for (let j = 0; j < B; j++) newQuads.push([rings[ring][j], rings[ring][(j + 1) % B], rings[ring + 1][(j + 1) % B], rings[ring + 1][j]]);
-    // the middle: a grid a by b whose edge is the innermost ring (2 (a + b) vertices), its inside points by Coons' blend of the edge
-    const a = Math.floor(B / 4), b = B / 2 - a, last = rings[RINGS], edge = rim.map((_, j) => spoke(j, CAP));
-    const g: number[][] = Array.from({ length: a + 1 }, () => new Array<number>(b + 1).fill(-1));
-    // its corners on the diagonals, so its rows run level and upright
-    let first = 0;
-    const offDiagonal = (j: number) => Math.abs(Math.sin(2 * (even[j] - Math.PI / 4)));
-    for (let j = 1; j < B; j++) if (offDiagonal(j) < offDiagonal(first)) first = j;
-    const round = (i: number, j: number) => (first + (j === 0 ? i : i === a ? a + j : j === b ? a + b + (a - i) : 2 * a + b + (b - j))) % B;
-    for (let i = 0; i <= a; i++) {
-      for (let j = 0; j <= b; j++) {
-        if (i === 0 || i === a || j === 0 || j === b) {
-          g[i][j] = last[round(i, j)];
-          continue;
-        }
-        const s = i / a, t = j / b, P = (ii: number, jj: number) => edge[round(ii, jj)];
-        const uv = [0, 1].map((k) => (1 - t) * P(i, 0)[k] + t * P(i, b)[k] + (1 - s) * P(0, j)[k] + s * P(a, j)[k] - ((1 - s) * (1 - t) * P(0, 0)[k] + s * (1 - t) * P(a, 0)[k] + (1 - s) * t * P(0, b)[k] + s * t * P(a, b)[k])) as [number, number];
-        g[i][j] = add(hit(...uv));
-      }
-    }
-    for (let i = 0; i < a; i++) for (let j = 0; j < b; j++) newQuads.push([g[i][j], g[i + 1][j], g[i + 1][j + 1], g[i][j + 1]]);
-    // The dense mesh has the nipple and the ring round it modelled on it, and the patch's middle is
-    // fine enough to take them up as a lid with a crease along its top. The body is drawn in lines
-    // and wants the plain round form: the patch's inside (from its second ring in) is eased, each
-    // vertex towards the middle of its neighbours, in the body and in every morph alike.
-    {
-      const mine = newQuads.slice(-(RINGS * B + a * b)), beside = new Map<number, Set<number>>();
-      for (const q of mine) for (let j = 0; j < 4; j++) for (const o of [q[(j + 1) % 4], q[(j + 3) % 4]]) beside.set(q[j], (beside.get(q[j]) ?? new Set()).add(o));
-      const free = [...beside.keys()].filter((v) => v >= n && !rings[1].includes(v));
-      const rowOf = (v: number): ArrayLike<number> => (v < n ? V.subarray(v * D, v * D + D) : rows[v - n]);
-      const places = [0, 1, 2, ...Array.from({ length: 3 * NM }, (_, k) => OFF_M + k)];
-      for (let pass = 0; pass < EASE; pass++) {
-        const to = free.map((v) => places.map((k) => [...beside.get(v)!].reduce((s, o) => s + rowOf(o)[k], 0) / beside.get(v)!.size));
-        free.forEach((v, i) => places.forEach((k, c) => (rows[v - n][k] += 0.5 * (to[i][c] - rows[v - n][k]))));
-      }
-    }
-    // no quad of the patch folded over, on the female body or with the full cup
-    {
-      const pos = (i: number, off: number): V3 => (i < n ? at(i, off) : ([rows[i - n][off], rows[i - n][off + 1], rows[i - n][off + 2]] as V3));
-      for (const off of [OFF_M, OFF_M + 3 * BREAST]) {
-        for (const q of newQuads.slice(-(RINGS * B + a * b))) {
-          const p = q.map((v) => pos(v, off)), mid = p.reduce((s, x) => [s[0] + x[0] / 4, s[1] + x[1] / 4, s[2] + x[2] / 4] as V3, [0, 0, 0] as V3);
-          if (dot(norm(cross(sub(p[2], p[0]), sub(p[3], p[1]))), norm(sub(mid, eye))) < 0.1) throw new Error(`breast ${side}: a quad of the patch faces inwards`);
-        }
-      }
-    }
-    drop.push(...inside);
-    cutQuads.push(...out);
-    console.log(`breast ${side < 0 ? "L" : "R"} rings: ${out.size} quads and ${inside.size} vertices out; a rim of ${B}, ${RINGS} rings and a ${a} x ${b} middle in`);
-  }
-  // nothing open but the neck, every edge between two quads that wind the same way
-  const all = [...quads.filter((_, f) => !cutQuads.includes(f)), ...newQuads], seen = new Map<number, number>();
-  for (const q of all) {
-    for (let j = 0; j < 4; j++) {
-      const k = q[j] * 1e6 + q[(j + 1) % 4];
-      if (seen.has(k)) throw new Error(`the detail mesh has the edge ${q[j]} to ${q[(j + 1) % 4]} twice the same way`);
-      seen.set(k, 1);
-    }
-  }
-  let open = 0;
-  for (const k of seen.keys()) if (!seen.has((k % 1e6) * 1e6 + Math.floor(k / 1e6))) open++;
-  if (open !== rim.length) throw new Error(`the detail mesh has ${open} open edges: the neck's rim is ${rim.length}`);
-  return { rows, quads: newQuads, drop: drop.sort((p, q) => p - q), cut: cutQuads.sort((p, q) => p - q) };
-})();
-
 /** at most this many bones move each vertex */
 const INF = 8;
 const header = {
@@ -1233,7 +981,6 @@ const header = {
     femalePoints: Object.fromEntries(Object.entries({ ...fingersOn(female, "R"), ...fingersOn(female, "L") }).map(([k, v]) => [k, v.map(r2)])),
     femaleRimShape,
     tissues,
-    detail: { vertices: detail.rows.length, quads: detail.quads.length, drop: detail.drop, cut: detail.cut },
   },
 };
 // padded to 4 bytes (bytes, not characters: the arrays after it must start aligned)
@@ -1243,24 +990,18 @@ const H = new TextEncoder().encode(json);
 const coreSize = 4 + H.length + n * 12 + n * INF + n * INF * 2 + quads.length * 8;
 const morphOff = coreSize + (coreSize % 4 ? 4 - (coreSize % 4) : 0);
 const tissueOff = morphOff + morphDeltas.byteLength;
-const pad4 = (x: number) => x + (x % 4 ? 4 - (x % 4) : 0);
-// then the detail mesh's additions (4-byte aligned): its vertices' rest places (f32), bones (u8) and
-// weights (u16), its quads (u16, over the mesh's own vertices and then its new ones), its morph
-// deltas (i16) and tissue weights (u8)
-const dn = detail.rows.length;
-const detailOff = pad4(tissueOff + tissueWeights.byteLength);
-const totalSize = detailOff + dn * 12 + dn * INF + pad4(dn * INF) - dn * INF + dn * INF * 2 + detail.quads.length * 8 + NM * dn * 6 + NT * dn;
-const buf = new ArrayBuffer(pad4(totalSize));
+const totalSize = tissueOff + tissueWeights.byteLength;
+const buf = new ArrayBuffer(totalSize + (totalSize % 4 ? 4 - (totalSize % 4) : 0));
 const dv = new DataView(buf);
 dv.setUint32(0, H.length, true);
 new Uint8Array(buf, 4, H.length).set(H);
 let o = 4 + H.length;
 for (let i = 0; i < n; i++) for (let k = 0; k < 3; k++, o += 4) dv.setFloat32(o, V[i * D + k], true);
+const skin: [number, number][][] = [];
 let most = 0, dropped = 0;
-/** a vertex's bones and weights as the file has them: its INF heaviest, as 16-bit shares of 65535 */
-const skinOf = (row: ArrayLike<number>, at: number, i: number): [number, number][] => {
+for (let i = 0; i < n; i++) {
   const all: [number, number][] = [];
-  for (let b = 0; b < NB; b++) if (row[at + OFF_W + b] > 1e-4) all.push([b, row[at + OFF_W + b]]);
+  for (let b = 0; b < NB; b++) if (V[i * D + OFF_W + b] > 1e-4) all.push([b, V[i * D + OFF_W + b]]);
   all.sort((a, b) => b[1] - a[1]);
   most = Math.max(most, all.length);
   const top = all.slice(0, INF);
@@ -1270,10 +1011,8 @@ const skinOf = (row: ArrayLike<number>, at: number, i: number): [number, number]
   const q = top.map(([b, w]) => [b, Math.round((65535 * w) / sum)] as [number, number]);
   q[0][1] += 65535 - q.reduce((s, [, w]) => s + w, 0);
   while (q.length < INF) q.push([0, 0]);
-  return q;
-};
-const skin: [number, number][][] = [];
-for (let i = 0; i < n; i++) skin.push(skinOf(V, i * D, i));
+  skin.push(q);
+}
 console.log(`bones per vertex: at most ${most}; the most weight dropped past ${INF}: ${(100 * dropped).toFixed(2)}%`);
 for (const q of skin) for (const [b] of q) dv.setUint8(o++, b);
 for (const q of skin) for (const [, w] of q) {
@@ -1288,32 +1027,6 @@ for (const q of quads) for (const v of q) {
 o = morphOff;
 for (let i = 0; i < morphDeltas.length; i++, o += 2) dv.setInt16(o, morphDeltas[i], true);
 new Uint8Array(buf, tissueOff, tissueWeights.byteLength).set(tissueWeights);
-{
-  if (n + dn > 65535) throw new Error(`${n + dn} vertices with the detail: too many for 16-bit indices`);
-  o = detailOff;
-  for (const row of detail.rows) for (let k = 0; k < 3; k++, o += 4) dv.setFloat32(o, row[k], true);
-  const dSkin = detail.rows.map((row, i) => skinOf(row, 0, n + i));
-  for (const q of dSkin) for (const [b] of q) dv.setUint8(o++, b);
-  o = pad4(o);
-  for (const q of dSkin) for (const [, w] of q) {
-    dv.setUint16(o, w, true);
-    o += 2;
-  }
-  for (const q of detail.quads) for (const v of q) {
-    dv.setUint16(o, v, true);
-    o += 2;
-  }
-  // the morphs' deltas, as the mesh's own are made (above)
-  for (let m = 0; m < NM; m++) {
-    const off = OFF_M + 3 * m, ref = MORPH_REF_OFF[m];
-    for (const row of detail.rows) {
-      const fade = m > 0 ? smooth01((rimY - 1.5 - row[1]) / 6.5) : 1;
-      for (let k = 0; k < 3; k++, o += 2) dv.setInt16(o, Math.max(-32767, Math.min(32767, Math.round(((row[off + k] - row[ref + k]) * fade) / MORPH_SCALE))), true);
-    }
-  }
-  for (let t = 0; t < NT; t++) for (const row of detail.rows) dv.setUint8(o++, Math.round(Math.max(0, Math.min(1, row[OFF_T + t])) * 255));
-  if (o !== totalSize) throw new Error(`the detail's bytes: wrote to ${o}, sized ${totalSize}`);
-}
 writeFileSync(OUT, new Uint8Array(buf));
 // how many edges meet at each vertex: the mesh's poles
 const { near } = topology(quads, n);

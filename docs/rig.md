@@ -85,18 +85,9 @@ is fitted to the model once.
   joints and neck rim), body fat, muscularity, breast cup volume and gluteal volume (`rig.setAnatomy`).
   Every one at 0 is the body as it was before there were any, byte for byte (a test pins it), and
   the bodies are adults: MakeHuman's "young" (adult) targets only, none of its child ones. The
-  breast is MakeHuman's largest cup in its firm shape, the two brought half way together by its
-  own target; `butt` is its buttocks volume a third past full with some of its wider hip, and
-  `waist` draws the waist in (its waist measure and a half-toned stomach): its artists' shapes,
-  mixed, not ones made here.
-- **The detail mesh** (`new Rig(buf, { detail: true })`): the plain mesh's chest is a grid, and
-  a breast grows out of some forty of its quads, too few to be round (a flat front 8 cm tall)
-  and laid the wrong way to look it. The detail mesh has those quads replaced, each side, by
-  rings round the breast's middle closed by a small grid (all quads, no pole of more than the
-  mesh's six edges), each new vertex a point on MakeHuman's dense mesh, so the bodies, morphs,
-  bones and tissue weights all agree there. It is stored after the plain mesh as what to leave
-  out and what to add (+186 vertices), and the plain mesh, which every reader gets without the
-  option, is unchanged. For a body with breasts: on a flat chest the rings lie crowded.
+  breast is MakeHuman's largest cup between its average and firm shapes; `butt` is its buttocks
+  volume a third past full with some of its wider hip, and `waist` draws the waist in (its
+  waist measure and a half-toned stomach): its artists' shapes, mixed, not ones made here.
   `female` moves the skeleton and the neck's rim, so it is set before `wearHead`; the other four
   move live with the head on (they fade out under the rim, and only the change in shape is added
   to the rest mesh, which the head has fitted its neck into).
