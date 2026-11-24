@@ -85,10 +85,9 @@ is fitted to the model once.
   joints and neck rim), body fat, muscularity, breast cup volume and gluteal volume (`rig.setAnatomy`).
   Every one at 0 is the body as it was before there were any, byte for byte (a test pins it), and
   the bodies are adults: MakeHuman's "young" (adult) targets only, none of its child ones. The
-  breast is MakeHuman's largest cup between its average and firm shapes; `butt` is the buttocks
-  with the hips and thighs they sit on (its buttocks volume a quarter past full, its hips deeper
-  and a little higher, half of its hips' and thighs' girth), and `waist` draws the waist in (its
-  waist measure and a toned stomach): its artists' shapes, mixed, not ones made here.
+  breast is MakeHuman's largest cup between its average and firm shapes; `butt` is its buttocks
+  volume a third past full with some of its wider hip, and `waist` draws the waist in (its
+  waist measure and a half-toned stomach): its artists' shapes, mixed, not ones made here.
   `female` moves the skeleton and the neck's rim, so it is set before `wearHead`; the other four
   move live with the head on (they fade out under the rim, and only the change in shape is added
   to the rest mesh, which the head has fitted its neck into).

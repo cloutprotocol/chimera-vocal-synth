@@ -105,8 +105,6 @@ interface GaitConfig {
   pelvisList: number;
   /** forward trunk lean (deg) */
   leanFwd: number;
-  /** the small of the back arched: the pelvis tipped forward by this and the spine brought back upright over it (deg) */
-  arch: number;
   /** chest counter-twist relative to pelvis (deg) */
   chestTwist: number;
   /** arm forward/back swing amplitude (deg) */
@@ -131,7 +129,6 @@ const CONFIGS: Record<GaitStyle, GaitConfig> = {
     pelvisYaw: 7.5,
     pelvisList: 4.0,
     leanFwd: 4.5,
-    arch: 0,
     chestTwist: 12.5,
     armSwing: 26,
     elbowBase: 16,
@@ -149,7 +146,6 @@ const CONFIGS: Record<GaitStyle, GaitConfig> = {
     pelvisYaw: 12.0,
     pelvisList: 7.2,
     leanFwd: 2.0,
-    arch: 7,
     chestTwist: 17.5,
     armSwing: 22,
     elbowBase: 12,
@@ -167,7 +163,6 @@ const CONFIGS: Record<GaitStyle, GaitConfig> = {
     pelvisYaw: 9.5,
     pelvisList: 4.6,
     leanFwd: 11.5,
-    arch: 0,
     chestTwist: 18.0,
     armSwing: 46,
     elbowBase: 76,
@@ -210,8 +205,7 @@ export function walkFrame(
   const armClear = (armOut ?? 4 + 4 * female + 5 * fat) + (cfg.jog ? 8 : 4);
 
   const evalLeg = (u: number): Leg => {
-    // with the pelvis tipped forward the thigh is raised as much, to swing where it did
-    const flex = samplePeriodic(cfg.jog ? JOG_HIP : WALK_HIP, u) + cfg.arch;
+    const flex = samplePeriodic(cfg.jog ? JOG_HIP : WALK_HIP, u);
     const knee = Math.max(0, samplePeriodic(cfg.jog ? JOG_KNEE : WALK_KNEE, u));
     const ankle = samplePeriodic(cfg.jog ? JOG_ANKLE : WALK_ANKLE, u);
     const toes = Math.max(0, samplePeriodic(cfg.jog ? JOG_TOES : WALK_TOES, u));
@@ -263,14 +257,14 @@ export function walkFrame(
 
   const p = pose({
     body: {
-      tip: cfg.leanFwd * 0.45 + cfg.arch,
+      tip: cfg.leanFwd * 0.45,
       lean: pelvisLean,
       turn: pelvisTurn,
       x: 0,
       y: bob,
       z: swayZ,
     },
-    spine: { flex: spineFlex - cfg.arch, bend: spineBend, twist: spineTwist },
+    spine: { flex: spineFlex, bend: spineBend, twist: spineTwist },
     neck: { flex: neckFlex, bend: neckBend, twist: neckTwist },
     arms: { R: evalArm(uL), L: evalArm(uR) },
     legs: { R: evalLeg(uR), L: evalLeg(uL) },

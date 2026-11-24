@@ -46,7 +46,7 @@ const BODY_PRESETS: Record<string, BodyPreset> = {
   // (Curvy: a slim waist over full hips, buttocks and thighs, little fat; Heavy is the fat)
   "female-petite": { label: "Female · petite", voice: "female", anatomy: { female: 1, fat: 0, muscle: 0.2, breast: 0, butt: 0, waist: 0.3 }, penis: "none", jiggle: 1.0 },
   "female": { label: "Female · natural", voice: "female", anatomy: { female: 1, fat: 0.1, muscle: 0.35, breast: 0.3, butt: 0.3, waist: 0.3 }, penis: "none", jiggle: 1.1 },
-  "female-curvy": { label: "Female · curvy", voice: "female", anatomy: { female: 1, fat: 0.05, muscle: 0.35, breast: 0.85, butt: 1, waist: 1 }, penis: "none", jiggle: 1.3 },
+  "female-curvy": { label: "Female · curvy", voice: "female", anatomy: { female: 1, fat: 0.05, muscle: 0.35, breast: 0.9, butt: 1.1, waist: 1 }, penis: "none", jiggle: 1.3 },
   "female-heavy": { label: "Female · heavy", voice: "female", anatomy: { female: 1, fat: 0.8, muscle: 0.25, breast: 1, butt: 0.8, waist: 0 }, penis: "none", jiggle: 1.45 },
   "female-athletic": { label: "Female · athletic", voice: "female", anatomy: { female: 1, fat: 0.05, muscle: 0.95, breast: 0.2, butt: 0.5, waist: 0.6 }, penis: "none", jiggle: 0.85 },
   "male": { label: "Male · natural", voice: "male", anatomy: { female: 0, fat: 0.22, muscle: 0.55, breast: 0, butt: 0.25, waist: 0 }, penis: "M", jiggle: 0.95 },

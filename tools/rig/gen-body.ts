@@ -127,7 +127,7 @@ for (const race of ["african", "asian", "caucasian"]) await addTarget(mhFemale, 
 // - fat: subcutaneous adipose fullness (universal maxweight + regional fat pads)
 // - muscle: athletic muscularity (universal maxmuscle + major superficial muscle groups)
 // - breast: bust cup volume (female maxcup - averagecup)
-// - butt: the buttocks with the hips and thighs under them
+// - butt: gluteal volume (buttocks-volume-incr)
 // - waist: the waist drawn in
 const mhFat = mh.map((p) => [...p] as V3);
 await addTarget(mhFat, "targets/macrodetails/universal-male-young-averagemuscle-maxweight.target", 0.55);
@@ -163,16 +163,15 @@ const mhBreast = mhFemale.map((p) => [...p] as V3);
 await addTarget(mhBreast, "targets/breast/female-young-averagemuscle-averageweight-maxcup-averagefirmness.target", 0.55);
 await addTarget(mhBreast, "targets/breast/female-young-averagemuscle-averageweight-maxcup-maxfirmness.target", 0.45);
 
-// the buttocks with the hips and thighs they sit on, as a full lower body has them: MakeHuman's
-// buttocks volume a quarter past its full weight (its full weight is slight), its hips deeper
-// front to back and a little higher (the buttocks lifted and carried out behind, not hung
-// lower), and half of its wider hips' and thighs' girth. The volume alone, pushed further, sat on
-// the thigh like a ball; with the hips' width it made the pelvis a saddle.
+// MakeHuman's buttocks volume, a third past its full weight (its full weight is slight), and some
+// of its wider hip where the buttocks are, so the hip runs into them. (With the hips made deeper
+// and higher and the thighs' girth added, the buttocks came to a point seen from the side.)
 const mhButt = mhFemale.map((p) => [...p] as V3);
-for (const [t, w] of [["buttocks/buttocks-volume-incr", 1.25], ["hip/hip-scale-depth-incr", 0.5], ["hip/hip-trans-up", 0.3], ["measure/measure-hips-circ-incr", 0.45], ["measure/measure-thigh-circ-incr", 0.45]] as const) await addTarget(mhButt, `targets/${t}.target`, w);
-// the waist drawn in: MakeHuman's waist measure taken down a fifth past its end, and the stomach toned (flat)
+await addTarget(mhButt, "targets/buttocks/buttocks-volume-incr.target", 1.35);
+// the waist drawn in: MakeHuman's waist measure taken down to its end, and the stomach half toned
 const mhWaist = mhFemale.map((p) => [...p] as V3);
-for (const [t, w] of [["measure/measure-waist-circ-decr", 1.2], ["stomach/stomach-tone-incr", 0.7]] as const) await addTarget(mhWaist, `targets/${t}.target`, w);
+await addTarget(mhWaist, "targets/measure/measure-waist-circ-decr.target", 1);
+await addTarget(mhWaist, "targets/stomach/stomach-tone-incr.target", 0.5);
 const hipWide = await targetMag("targets/hip/hip-scale-horiz-incr.target");
 const buttMag = await targetMag("targets/buttocks/buttocks-volume-incr.target");
 const bellyMag = await targetMag("targets/stomach/stomach-tone-decr.target");
@@ -184,9 +183,9 @@ const bellyMag = await targetMag("targets/stomach/stomach-tone-decr.target");
     const [i, dx, dy, dz] = line.split(/\s+/).map(Number);
     const local = Math.min(1, buttMag[i] / 0.8 + (hipWide[i] > 0.3 ? 0.35 : 0));
     if (local <= 0) continue;
-    mhButt[i][0] += 0.15 * local * dx;
-    mhButt[i][1] += 0.15 * local * dy;
-    mhButt[i][2] += 0.15 * local * dz;
+    mhButt[i][0] += 0.3 * local * dx;
+    mhButt[i][1] += 0.3 * local * dy;
+    mhButt[i][2] += 0.3 * local * dz;
   }
 }
 
