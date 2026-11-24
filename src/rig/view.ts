@@ -112,6 +112,8 @@ interface SubdivCache {
   readonly corner: Uint32Array;
   readonly pos: Float32Array;
   readonly norm: Float32Array;
+  /** how far each of the mesh's own vertices was smoothed off its place (xyz), to put it back */
+  readonly shift: Float32Array;
   readonly geo: THREE.BufferGeometry;
 }
 
@@ -209,7 +211,7 @@ function buildSubdiv(rig: Rig): SubdivCache {
   geo.setAttribute("heat", new THREE.BufferAttribute(new Float32Array(N), 1).setUsage(THREE.DynamicDrawUsage));
   geo.setAttribute("tint", new THREE.BufferAttribute(new Float32Array(3 * N), 3));
   geo.setAttribute("tone", new THREE.BufferAttribute(new Float32Array(N), 1));
-  return { n, nq, ne, nSub, nqSub, eA, eB, eF0, eF1, vNearOff, vNear, vFaceOff, vFace, vOpen0, vOpen1, quads, corner, pos: new Float32Array(3 * nSub), norm: new Float32Array(3 * nSub), geo };
+  return { n, nq, ne, nSub, nqSub, eA, eB, eF0, eF1, vNearOff, vNear, vFaceOff, vFace, vOpen0, vOpen1, quads, corner, pos: new Float32Array(3 * nSub), norm: new Float32Array(3 * nSub), shift: new Float32Array(3 * n), geo };
 }
 
 /** evaluate Catmull-Clark stencil on a flat `stride`-component array (1 for tone, 3 for xyz/tint) */
@@ -253,6 +255,29 @@ function evalSubdiv(s: SubdivCache, Q: Uint32Array, src: ArrayLike<number>, stri
       for (let j = f0; j < f1; j++) acc += invKF * out[(n + vFace[j]) * stride + c];
       out[o + c] = acc;
     }
+  }
+}
+
+/**
+ * Put the subdivided surface back through the mesh it was made from. Catmull-Clark smooths a
+ * mesh inwards: a full breast's apex drew 1.4 cm inside its own vertices, the nose's tip 0.75,
+ * and the lips' cut 0.2 cm off the lips the head draws, while the head's lines, the muscles and
+ * the tissue's rings stayed on the mesh. Each of the mesh's vertices goes back where it was, and
+ * each new point moves by the mean of its corners' moves, so the surface stays as smooth.
+ */
+function throughMesh(s: SubdivCache, Q: Uint32Array, src: ArrayLike<number>, out: Float32Array): void {
+  const { n, nq, ne, eA, eB, shift } = s;
+  for (let i = 0; i < 3 * n; i++) {
+    shift[i] = src[i] - out[i];
+    out[i] = src[i];
+  }
+  for (let f = 0; f < nq; f++) {
+    const a = 3 * Q[4 * f], b = 3 * Q[4 * f + 1], c = 3 * Q[4 * f + 2], d = 3 * Q[4 * f + 3], o = 3 * (n + f);
+    for (let k = 0; k < 3; k++) out[o + k] += 0.25 * (shift[a + k] + shift[b + k] + shift[c + k] + shift[d + k]);
+  }
+  for (let ei = 0; ei < ne; ei++) {
+    const a = 3 * eA[ei], b = 3 * eB[ei], o = 3 * (n + nq + ei);
+    for (let k = 0; k < 3; k++) out[o + k] += 0.5 * (shift[a + k] + shift[b + k]);
   }
 }
 
@@ -377,6 +402,10 @@ export class RigView {
     const g = level === 1 ? this.sub!.geo : this.geo;
     this.front.geometry = this.back.geometry = g;
   }
+  /** the subdivided surface as last drawn (xyz; its first `rig.n` points are the mesh's own vertices), or null when the mesh is drawn as it is */
+  get subdivided(): Float32Array | null {
+    return this.subdivLevel === 1 && this.sub ? this.sub.pos : null;
+  }
   /** current rendered quad count (4× when subdivided) */
   get quadCount(): number {
     return this.subdivLevel === 1 && this.sub ? this.sub.nqSub : this.rig.nq;
@@ -446,7 +475,10 @@ export class RigView {
     if (this.subdivLevel === 1 && this.sub) {
       const s = this.sub;
       evalSubdiv(s, rig.quads, P, 3, s.pos);
+      throughMesh(s, rig.quads, P, s.pos);
       quadNormals(s.nSub, s.nqSub, s.quads, s.pos, s.norm);
+      // the mesh's own normals are kept up either way: others read them
+      vertexNormals(rig, P, this.normals);
       const gp = s.geo.getAttribute("position") as THREE.BufferAttribute, gn = s.geo.getAttribute("normal") as THREE.BufferAttribute, gh = s.geo.getAttribute("heat") as THREE.BufferAttribute;
       const A = gp.array as Float32Array, NN = gn.array as Float32Array, HH = gh.array as Float32Array;
       for (let c = 0; c < s.corner.length; c++) {

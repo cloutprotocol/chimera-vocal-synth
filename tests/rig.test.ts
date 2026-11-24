@@ -889,4 +889,29 @@ describe("the shaped body and the rest of the rig", () => {
       ms.dispose();
     }
   });
+
+  test("the subdivided skin passes through the mesh it is made from (smoothed inwards, a full breast drew 1.4 cm inside its own vertices and the lips' cut 0.2 cm off the drawn lips)", () => {
+    const rig = loadRig();
+    rig.setAnatomy(SHAPES["female, full"]);
+    const model = new M.VoiceModel(M.BODIES.female, 48000);
+    M.head.wearHead(rig, model);
+    const view = new M.view.RigView(rig);
+    expect(view.subdivided).toBe(null);
+    view.subdivide = 1;
+    rig.pose(M.pose.PRESETS["flex biceps"]);
+    rig.skin(view.posed);
+    view.update();
+    const drawn = view.subdivided!;
+    expect(maxMove(view.posed, drawn, Array(rig.n).keys())).toBeLessThan(1e-4);
+    // and the new points lie between the old: none further from its quad's or edge's corners than they are from each other
+    for (let f = 0; f < rig.nq; f++) {
+      const q = [0, 1, 2, 3].map((j) => rig.quads[4 * f + j]), mid = at(drawn, rig.n + f);
+      const reach = Math.max(...q.map((v) => at(view.posed, v).distanceTo(at(view.posed, q[0]))), at(view.posed, q[1]).distanceTo(at(view.posed, q[3])));
+      expect(Math.max(...q.map((v) => mid.distanceTo(at(view.posed, v))))).toBeLessThan(reach + 1e-6);
+    }
+    // the mesh's own normals are kept up while it is drawn subdivided
+    expect(maxMove(view.normals, M.vertexNormals(rig, view.posed), Array(rig.n).keys())).toBeLessThan(1e-6);
+    view.dispose();
+    model.dispose();
+  });
 });
