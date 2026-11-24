@@ -16,6 +16,7 @@
 import * as THREE from "three";
 import { Beams, Poly } from "../ui/render/beams3d.ts";
 import { V, mix } from "../ui/colors.ts";
+import { neutral } from "./pose.ts";
 import type { Rig } from "./rig.ts";
 import type { SoftTissue } from "./physics.ts";
 
@@ -359,10 +360,12 @@ export class MuscleSystem {
 
   /**
    * Recompute rest anchor positions and sparse skin-bulge influences from the rig's current
-   * anatomy (call whenever `female` changes, or after `rig.setAnatomy`).
+   * anatomy (call whenever `female` changes, or after `rig.setAnatomy`). A muscle's rest length
+   * is its length standing at anatomical zero, so the rig is posed there and left there.
    */
   fitAnatomy(): void {
     const rig = this.rig;
+    rig.pose(neutral());
     const f = rig.anatomy.female;
     const scaleSex = 1 - 0.14 * f;
 
@@ -401,8 +404,12 @@ export class MuscleSystem {
         m.bellyRest.z += sgn * 1.1 * f;
       }
 
-      // Compute rest polyline length (origin → belly → insert)
-      m.restLength = m.originRest.distanceTo(m.bellyRest) + m.bellyRest.distanceTo(m.insertRest);
+      // its rest length (origin → belly → insert) standing, not in the mesh's A pose: measured
+      // from that, a body standing still read its pectorals a third contracted, and lit them
+      this.posedPoint(m.originBone, m.originRest, this.p0);
+      this.posedPoint(m.bellyBone, m.bellyRest, this.pm);
+      this.posedPoint(m.insertBone, m.insertRest, this.p1);
+      m.restLength = this.p0.distanceTo(this.pm) + this.pm.distanceTo(this.p1);
       m.length = m.restLength;
 
       // Precompute sparse body vertices influenced by this muscle's belly for dynamic skin bulging

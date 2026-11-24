@@ -877,4 +877,16 @@ describe("the shaped body and the rest of the rig", () => {
     for (const turn of [90, 180]) expect(Math.abs(swing(turn) - ahead)).toBeLessThan(0.05);
     part.dispose();
   });
+
+  test("standing at anatomical zero no muscle reads as contracted (their rest lengths were the A pose's: the pectorals read a third contracted, and lit)", () => {
+    for (const [name, shape] of Object.entries(SHAPES)) {
+      const rig = loadRig();
+      rig.setAnatomy(shape);
+      const ms = new M.muscles.MuscleSystem(rig);
+      rig.pose(M.pose.PRESETS.neutral);
+      ms.update(0);
+      for (const m of ms.muscles) expect([name, m.name, m.activation < 0.02]).toEqual([name, m.name, true]);
+      ms.dispose();
+    }
+  });
 });
