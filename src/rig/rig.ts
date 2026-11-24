@@ -59,8 +59,10 @@ export interface AnatomyParams {
   breast: number;
   /** 0..1 gluteal / buttocks volume */
   butt: number;
+  /** 0..1 the waist drawn in */
+  waist: number;
 }
-export const ANATOMY_DEFAULT: Readonly<AnatomyParams> = { female: 0, fat: 0, muscle: 0, breast: 0, butt: 0 };
+export const ANATOMY_DEFAULT: Readonly<AnatomyParams> = { female: 0, fat: 0, muscle: 0, breast: 0, butt: 0, waist: 0 };
 
 export interface Header {
   source: string;
@@ -254,6 +256,7 @@ export class Rig {
     if (params.muscle !== undefined) this.anatomy.muscle = clamp(params.muscle, 0, 1.5);
     if (params.breast !== undefined) this.anatomy.breast = clamp(params.breast, 0, 1.5);
     if (params.butt !== undefined) this.anatomy.butt = clamp(params.butt, 0, 1.5);
+    if (params.waist !== undefined) this.anatomy.waist = clamp(params.waist, 0, 1.5);
 
     const active: [Float32Array, number][] = [];
     for (const [k, w] of [
@@ -262,6 +265,7 @@ export class Rig {
       ["muscle", this.anatomy.muscle],
       ["breast", this.anatomy.breast],
       ["butt", this.anatomy.butt],
+      ["waist", this.anatomy.waist],
     ] as const) {
       if (w && this.morphs[k]) active.push([this.morphs[k], w]);
     }

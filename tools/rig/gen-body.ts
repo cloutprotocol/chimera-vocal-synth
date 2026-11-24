@@ -127,7 +127,8 @@ for (const race of ["african", "asian", "caucasian"]) await addTarget(mhFemale, 
 // - fat: subcutaneous adipose fullness (universal maxweight + regional fat pads)
 // - muscle: athletic muscularity (universal maxmuscle + major superficial muscle groups)
 // - breast: bust cup volume (female maxcup - averagecup)
-// - butt: gluteal volume (buttocks-volume-incr)
+// - butt: the buttocks with the hips and thighs under them
+// - waist: the waist drawn in
 const mhFat = mh.map((p) => [...p] as V3);
 await addTarget(mhFat, "targets/macrodetails/universal-male-young-averagemuscle-maxweight.target", 0.55);
 await addTarget(mhFat, "targets/macrodetails/universal-female-young-averagemuscle-maxweight.target", 0.55);
@@ -162,10 +163,16 @@ const mhBreast = mhFemale.map((p) => [...p] as V3);
 await addTarget(mhBreast, "targets/breast/female-young-averagemuscle-averageweight-maxcup-averagefirmness.target", 0.55);
 await addTarget(mhBreast, "targets/breast/female-young-averagemuscle-averageweight-maxcup-maxfirmness.target", 0.45);
 
+// the buttocks with the hips and thighs they sit on, as a full lower body has them: MakeHuman's
+// buttocks volume a quarter past its full weight (its full weight is slight), its hips deeper
+// front to back and a little higher (the buttocks lifted and carried out behind, not hung
+// lower), and half of its wider hips' and thighs' girth. The volume alone, pushed further, sat on
+// the thigh like a ball; with the hips' width it made the pelvis a saddle.
 const mhButt = mhFemale.map((p) => [...p] as V3);
-// MakeHuman's buttocks volume, a third past its full weight (its full weight is slight), and some
-// of its wider hip where the buttocks are, so the hip runs into them
-await addTarget(mhButt, "targets/buttocks/buttocks-volume-incr.target", 1.35);
+for (const [t, w] of [["buttocks/buttocks-volume-incr", 1.25], ["hip/hip-scale-depth-incr", 0.5], ["hip/hip-trans-up", 0.3], ["measure/measure-hips-circ-incr", 0.45], ["measure/measure-thigh-circ-incr", 0.45]] as const) await addTarget(mhButt, `targets/${t}.target`, w);
+// the waist drawn in: MakeHuman's waist measure taken down a fifth past its end, and the stomach toned (flat)
+const mhWaist = mhFemale.map((p) => [...p] as V3);
+for (const [t, w] of [["measure/measure-waist-circ-decr", 1.2], ["stomach/stomach-tone-incr", 0.7]] as const) await addTarget(mhWaist, `targets/${t}.target`, w);
 const hipWide = await targetMag("targets/hip/hip-scale-horiz-incr.target");
 const buttMag = await targetMag("targets/buttocks/buttocks-volume-incr.target");
 const bellyMag = await targetMag("targets/stomach/stomach-tone-decr.target");
@@ -177,9 +184,9 @@ const bellyMag = await targetMag("targets/stomach/stomach-tone-decr.target");
     const [i, dx, dy, dz] = line.split(/\s+/).map(Number);
     const local = Math.min(1, buttMag[i] / 0.8 + (hipWide[i] > 0.3 ? 0.35 : 0));
     if (local <= 0) continue;
-    mhButt[i][0] += 0.3 * local * dx;
-    mhButt[i][1] += 0.3 * local * dy;
-    mhButt[i][2] += 0.3 * local * dz;
+    mhButt[i][0] += 0.15 * local * dx;
+    mhButt[i][1] += 0.15 * local * dy;
+    mhButt[i][2] += 0.15 * local * dz;
   }
 }
 
@@ -187,8 +194,8 @@ const bellyMag = await targetMag("targets/stomach/stomach-tone-decr.target");
 const cm = ([x, y, z]: V3): V3 => [z * 10, y * 10, -x * 10];
 const male = mh.map(cm);
 const female = mhFemale.map(cm);
-const MORPH_NAMES = ["female", "fat", "muscle", "breast", "butt"] as const;
-const MORPH_MH: V3[][] = [mhFemale, mhFat, mhMuscle, mhBreast, mhButt];
+const MORPH_NAMES = ["female", "fat", "muscle", "breast", "butt", "waist"] as const;
+const MORPH_MH: V3[][] = [mhFemale, mhFat, mhMuscle, mhBreast, mhButt, mhWaist];
 const NM = MORPH_NAMES.length;
 const TISSUE_NAMES = ["breastL", "breastR", "buttL", "buttR", "belly"] as const;
 const NT = TISSUE_NAMES.length;
@@ -723,6 +730,7 @@ const neckEdges = new Set<number>();
   levelAt(OFF_M + 6, LEVEL);
   levelAt(OFF_M + 9, LEVEL_F);
   levelAt(OFF_M + 12, LEVEL_F);
+  levelAt(OFF_M + 15, LEVEL_F);
   for (let i = 0; i < n; i++) for (const o of near[i]) if (hops[i] >= 0 && hops[o] === hops[i] + 1) neckEdges.add(edgeKey(i, o));
   console.log(`rim levelled at ${LEVEL.toFixed(2)} (female ${LEVEL_F.toFixed(2)}): moved ${Math.min(...shift.map((s) => s.dy)).toFixed(2)} to ${Math.max(...shift.map((s) => s.dy)).toFixed(2)} cm`);
 }
@@ -892,7 +900,7 @@ const smooth01 = (x: number) => {
 };
 const morphDeltas = new Int16Array(NM * n * 3);
 // Reference channel for each morph: female/fat/muscle relative to male (0); breast/butt relative to female (OFF_M)
-const MORPH_REF_OFF = [0, 0, 0, OFF_M, OFF_M];
+const MORPH_REF_OFF = [0, 0, 0, OFF_M, OFF_M, OFF_M];
 for (let m = 0; m < NM; m++) {
   const off = OFF_M + 3 * m, ref = MORPH_REF_OFF[m], keepNeck = m > 0;
   let maxD = 0;
@@ -952,7 +960,7 @@ const tissues = TISSUE_META.map((meta, t) => {
 /** at most this many bones move each vertex */
 const INF = 8;
 const header = {
-  source: `MakeHuman (CC0): ${PROXY} on the base mesh hm08 (adult male + female/fat/muscle/breast/butt targets), MPFB2's Rigify human rig and weights; subdivided ${LEVELS}×`,
+  source: `MakeHuman (CC0): ${PROXY} on the base mesh hm08 (adult male + female/fat/muscle/breast/butt/waist targets), MPFB2's Rigify human rig and weights; subdivided ${LEVELS}×`,
   licence: "CC0 (MakeHuman assets)",
   bones: KEEP.map((name, i) => {
     const e = ends(name);

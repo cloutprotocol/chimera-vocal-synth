@@ -43,14 +43,15 @@ interface BodyPreset {
 }
 const BODY_PRESETS: Record<string, BodyPreset> = {
   // every slider at 0 is MakeHuman's average young adult, so the shapes are named from there
-  "female-petite": { label: "Female · petite", voice: "female", anatomy: { female: 1, fat: 0, muscle: 0.2, breast: 0, butt: 0 }, penis: "none", jiggle: 1.0 },
-  "female": { label: "Female · natural", voice: "female", anatomy: { female: 1, fat: 0.1, muscle: 0.35, breast: 0.3, butt: 0.3 }, penis: "none", jiggle: 1.1 },
-  "female-curvy": { label: "Female · curvy", voice: "female", anatomy: { female: 1, fat: 0.15, muscle: 0.3, breast: 0.9, butt: 1 }, penis: "none", jiggle: 1.3 },
-  "female-heavy": { label: "Female · heavy", voice: "female", anatomy: { female: 1, fat: 0.8, muscle: 0.25, breast: 1, butt: 1 }, penis: "none", jiggle: 1.45 },
-  "female-athletic": { label: "Female · athletic", voice: "female", anatomy: { female: 1, fat: 0.05, muscle: 0.95, breast: 0.2, butt: 0.6 }, penis: "none", jiggle: 0.85 },
-  "male": { label: "Male · natural", voice: "male", anatomy: { female: 0, fat: 0.22, muscle: 0.55, breast: 0, butt: 0.25 }, penis: "M", jiggle: 0.95 },
-  "male-athletic": { label: "Male · muscular", voice: "male", anatomy: { female: 0, fat: 0.08, muscle: 1.15, breast: 0, butt: 0.45 }, penis: "M", jiggle: 0.75 },
-  "male-heavy": { label: "Male · heavy", voice: "male", anatomy: { female: 0, fat: 0.95, muscle: 0.3, breast: 0.15, butt: 0.65 }, penis: "M", jiggle: 1.3 },
+  // (Curvy: a slim waist over full hips, buttocks and thighs, little fat; Heavy is the fat)
+  "female-petite": { label: "Female · petite", voice: "female", anatomy: { female: 1, fat: 0, muscle: 0.2, breast: 0, butt: 0, waist: 0.3 }, penis: "none", jiggle: 1.0 },
+  "female": { label: "Female · natural", voice: "female", anatomy: { female: 1, fat: 0.1, muscle: 0.35, breast: 0.3, butt: 0.3, waist: 0.3 }, penis: "none", jiggle: 1.1 },
+  "female-curvy": { label: "Female · curvy", voice: "female", anatomy: { female: 1, fat: 0.05, muscle: 0.35, breast: 0.85, butt: 1, waist: 1 }, penis: "none", jiggle: 1.3 },
+  "female-heavy": { label: "Female · heavy", voice: "female", anatomy: { female: 1, fat: 0.8, muscle: 0.25, breast: 1, butt: 0.8, waist: 0 }, penis: "none", jiggle: 1.45 },
+  "female-athletic": { label: "Female · athletic", voice: "female", anatomy: { female: 1, fat: 0.05, muscle: 0.95, breast: 0.2, butt: 0.5, waist: 0.6 }, penis: "none", jiggle: 0.85 },
+  "male": { label: "Male · natural", voice: "male", anatomy: { female: 0, fat: 0.22, muscle: 0.55, breast: 0, butt: 0.25, waist: 0 }, penis: "M", jiggle: 0.95 },
+  "male-athletic": { label: "Male · muscular", voice: "male", anatomy: { female: 0, fat: 0.08, muscle: 1.15, breast: 0, butt: 0.45, waist: 0 }, penis: "M", jiggle: 0.75 },
+  "male-heavy": { label: "Male · heavy", voice: "male", anatomy: { female: 0, fat: 0.95, muscle: 0.3, breast: 0.15, butt: 0.65, waist: 0 }, penis: "M", jiggle: 1.3 },
 };
 
 const VIEW_MODES = ["anatomy", "muscles", "skin", "bones", "weights"] as const;
@@ -134,6 +135,7 @@ const readAnatomy = (): AnatomyParams => ({
   muscle: Number(field("muscle").value),
   breast: Number(field("breast").value),
   butt: Number(field("butt").value),
+  waist: Number(field("waist").value),
 });
 
 /** The skin drawn subdivided: twice over, with finer lines where its quads are big, once fat, breast or butt is up (view.ts, `subdivide`). */
@@ -265,6 +267,7 @@ field("fat").value = String(initPreset.anatomy.fat);
 field("muscle").value = String(initPreset.anatomy.muscle);
 field("breast").value = String(initPreset.anatomy.breast);
 field("butt").value = String(initPreset.anatomy.butt);
+field("waist").value = String(initPreset.anatomy.waist);
 field("penis").value = initPreset.penis;
 field("jiggle").value = String(initPreset.jiggle);
 syncSliderLabels();
@@ -277,6 +280,7 @@ field("body").onchange = () => {
   field("muscle").value = String(p.anatomy.muscle);
   field("breast").value = String(p.anatomy.breast);
   field("butt").value = String(p.anatomy.butt);
+  field("waist").value = String(p.anatomy.waist);
   field("penis").value = p.penis;
   field("jiggle").value = String(p.jiggle);
   syncSliderLabels();
@@ -299,7 +303,7 @@ field("body").onchange = () => {
   }
 };
 
-for (const name of ["fat", "muscle", "breast", "butt"] as const) {
+for (const name of ["fat", "muscle", "breast", "butt", "waist"] as const) {
   field(name).oninput = () => {
     syncSliderLabels();
     rig.setAnatomy(readAnatomy());
@@ -419,7 +423,6 @@ renderer.setAnimationLoop((now) => {
   controls.update();
 
   tissue.step(simDt);
-  maleGeo.update(simDt);
   // paused, the muscles hold as they were (a step of no time is taken as "show the target")
   if (playing) muscles.update(simDt, loads);
 
@@ -427,6 +430,7 @@ renderer.setAnimationLoop((now) => {
   vertexNormals(rig, skinned, skinNormals);
   muscles.deform(skinned, skinNormals);
   tissue.apply(skinned);
+  maleGeo.update(simDt, skinned);
 
   const open = Number(field("mouth").value);
   head.update(camera, { ...REST_ARTIC, jaw: 1.8 * open, lipAp: 1.8 * open }, null, dt);

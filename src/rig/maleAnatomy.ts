@@ -66,6 +66,9 @@ export class MaleAnatomy {
   private readonly tipWas = new THREE.Vector3();
   private readonly anchorRest = new THREE.Vector3();
   private anchorFor = "";
+  /** the triangle of the body's skin the root sits under, and the root's place on it (its corners' weights) */
+  private readonly on = [-1, -1, -1];
+  private readonly share = [0, 0, 0];
   private readonly tipPos = new THREE.Vector3();
   private readonly tipVel = new THREE.Vector3();
   private readonly dispLocal = new THREE.Vector3();
@@ -181,35 +184,57 @@ export class MaleAnatomy {
   }
 
   /**
-   * Where it roots at rest (body cm): on the midline 3.5 cm over the hips' joint, 1 cm under the
-   * skin there as the anatomy has shaped it: the skin's place read off the midline's own vertices
-   * either side of that height (the mound slopes, and a vertex a centimetre higher is further
-   * forward). Worked out from `female` and `fat` alone, the root stood 1 to 2.5 cm proud of a
-   * muscular body or a female one, its open ring in the air.
+   * Where it roots at rest (body cm): on the midline 4 cm over the crotch (the midline's lowest
+   * point under the pelvis), 1 cm under the skin there as the anatomy has shaped it. The skin is
+   * found by a ray forward from inside the pelvis to the mesh, and the triangle it meets is kept,
+   * so the root can be carried by the skin as drawn. (Worked out from `female` and `fat` alone,
+   * the root stood 1 to 2.5 cm proud of a muscular body or a female one, its open ring in the
+   * air; read off the midline's vertices, it missed the female body's, which has none there.)
    */
   private restAnchor(out: THREE.Vector3): THREE.Vector3 {
-    const rig = this.rig, a = rig.anatomy, key = `${a.female},${a.fat},${a.muscle},${a.breast},${a.butt}`;
+    const rig = this.rig, a = rig.anatomy, key = `${a.female},${a.fat},${a.muscle},${a.breast},${a.butt},${a.waist}`;
     if (key !== this.anchorFor) {
-      const R = rig.rest, hip = rig.bones[rig.bone("hips")].head, y = hip[1] + 3.5;
-      // the front of the midline: its nearest vertex under that height and the nearest over it
-      let under = -1, over = -1;
+      const R = rig.rest, Q = rig.quads, hip = rig.bones[rig.bone("hips")].head;
+      let crotch = Infinity;
       for (let i = 0; i < rig.bodyVertices; i++) {
-        if (Math.abs(R[3 * i + 2]) > 0.75 || R[3 * i] <= hip[0]) continue;
-        const h = R[3 * i + 1];
-        if (h <= y && (under < 0 || h > R[3 * under + 1])) under = i;
-        if (h > y && (over < 0 || h < R[3 * over + 1])) over = i;
+        if (Math.abs(R[3 * i + 2]) < 0.75 && Math.abs(R[3 * i] - hip[0]) < 6 && Math.abs(R[3 * i + 1] - hip[1]) < 8) crotch = Math.min(crotch, R[3 * i + 1]);
       }
-      let skin = hip[0] + 10;
-      if (under >= 0 && over >= 0) skin = R[3 * under] + ((R[3 * over] - R[3 * under]) * (y - R[3 * under + 1])) / (R[3 * over + 1] - R[3 * under + 1]);
-      else if (under >= 0 || over >= 0) skin = R[3 * Math.max(under, over)];
-      this.anchorRest.set(skin - 1, y, 0);
+      const y = (Number.isFinite(crotch) ? crotch : hip[1]) + 4, z = 0.3;
+      // the furthest forward the ray from (the hips' joint, that height, just off the midline) meets the skin
+      let skin = -Infinity;
+      this.on.fill(-1);
+      for (let f = 0; f < rig.nq; f++) {
+        if (Q[4 * f] >= rig.bodyVertices) break;
+        for (const [i0, i1, i2] of [[Q[4 * f], Q[4 * f + 1], Q[4 * f + 2]], [Q[4 * f], Q[4 * f + 2], Q[4 * f + 3]]]) {
+          const ay = R[3 * i0 + 1] - y, az = R[3 * i0 + 2] - z, by = R[3 * i1 + 1] - y, bz = R[3 * i1 + 2] - z, cy = R[3 * i2 + 1] - y, cz = R[3 * i2 + 2] - z;
+          const w0 = by * cz - bz * cy, w1 = cy * az - cz * ay, w2 = ay * bz - az * by, sum = w0 + w1 + w2;
+          if (!sum || !((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0))) continue;
+          const x = (w0 * R[3 * i0] + w1 * R[3 * i1] + w2 * R[3 * i2]) / sum;
+          if (x > hip[0] && x > skin) {
+            skin = x;
+            this.on[0] = i0;
+            this.on[1] = i1;
+            this.on[2] = i2;
+            this.share[0] = w0 / sum;
+            this.share[1] = w1 / sum;
+            this.share[2] = w2 / sum;
+          }
+        }
+      }
+      this.anchorRest.set((Number.isFinite(skin) ? skin : hip[0] + 10) - 1, y, 0);
       this.anchorFor = key;
     }
     return out.copy(this.anchorRest);
   }
 
-  /** advance pendulum soft-tissue physics and rebuild quad mesh for the current frame */
-  update(dt: number): void {
+  /**
+   * Advance pendulum soft-tissue physics and rebuild quad mesh for the current frame. With the
+   * frame's `skinned` mesh the root is put 1 cm under the skin as it is drawn; without, where
+   * the hips' bone carries its place at rest, which the skin there doesn't quite keep to (it is
+   * moved by the thighs too: standing, that root was 1.8 cm under a female body's skin, and 2.8
+   * under one with full hips).
+   */
+  update(dt: number, skinned?: Float32Array): void {
     const s = Math.max(0, Math.min(1.6, this.size));
     if (s <= 0.01) {
       this.group.visible = false;
@@ -232,6 +257,13 @@ export class MaleAnatomy {
     // World position of pubic root
     this.restAnchor(this.vAnchor);
     this.anchorWorld.copy(this.vAnchor).sub(H).applyQuaternion(S).add(P);
+    if (skinned && this.on[0] >= 0) {
+      const [i0, i1, i2] = this.on, [w0, w1, w2] = this.share;
+      this.vPt.set(1, 0, 0).applyQuaternion(S);
+      this.anchorWorld
+        .set(w0 * skinned[3 * i0] + w1 * skinned[3 * i1] + w2 * skinned[3 * i2], w0 * skinned[3 * i0 + 1] + w1 * skinned[3 * i1 + 1] + w2 * skinned[3 * i2 + 1], w0 * skinned[3 * i0 + 2] + w1 * skinned[3 * i1 + 2] + w2 * skinned[3 * i2 + 2])
+        .addScaledVector(this.vPt, -1);
+    }
 
     // Rest resting-flaccid tip offset in hips-local frame (curves slightly forward & hangs down)
     const restTipLocalX = 3.2 * scaleL;

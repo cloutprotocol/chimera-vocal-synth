@@ -857,10 +857,13 @@ describe("the shaped body and the rest of the rig", () => {
       part.size = M.maleAnatomy.PENIS_SIZES.M;
       for (let f = 0; f <= 24; f++) {
         rig.pose(f ? M.walk.walkFrame(f / 24, "walk", rig.anatomy).pose : M.pose.PRESETS.neutral);
-        part.update(1 / 60);
         rig.skin(P);
+        // given the frame's skin, 1 cm under it; without it, where the hips' bone carries its place: deeper, never out
+        part.update(1 / 60, P);
         const d = under(rig, P, part.root);
-        expect([name, f, d > 0.4 && d < 2.5]).toEqual([name, f, true]);
+        expect([name, f, d > 0.5 && d < 1.6]).toEqual([name, f, true]);
+        part.update(0);
+        expect([name, f, under(rig, P, part.root) > 0.4]).toEqual([name, f, true]);
       }
       part.dispose();
     }
@@ -942,5 +945,44 @@ describe("the shaped body and the rest of the rig", () => {
     expect(rig.anatomy).toEqual(was);
     expect(maxMove(rest, rig.rest, Array(rig.n).keys())).toBe(0);
     model.dispose();
+  });
+
+  test("the waist comes in and the hips fill out without the body with no anatomy changing (Curvy's waist was as wide as its ribs, and its buttocks a ball on the thigh)", () => {
+    /** the body's half width (cm) at a height, in the rest mesh, the arms left out */
+    const half = (rig: RigT, y: number) => {
+      let w = 0;
+      for (let i = 0; i < rig.bodyVertices; i++) {
+        let most = 0, bone = 0;
+        for (let j = 0; j < rig.INF; j++) {
+          if (rig.skinWeight[rig.INF * i + j] > most) {
+            most = rig.skinWeight[rig.INF * i + j];
+            bone = rig.skinIndex[rig.INF * i + j];
+          }
+        }
+        if (/arm|hand|clavicle|shoulder|elbow/.test(rig.bones[bone].name)) continue;
+        if (Math.abs(rig.rest[3 * i + 1] - y) < 1.5) w = Math.max(w, Math.abs(rig.rest[3 * i + 2]));
+      }
+      return w;
+    };
+    const plain = loadRig(), full = loadRig();
+    plain.setAnatomy({ female: 1 });
+    full.setAnatomy({ female: 1, butt: 1, waist: 1 });
+    // the waist: the narrowest the trunk is between the hips' joint and the chest's; the hips: the widest under it
+    const lo = plain.bones[plain.bone("hips")].head[1], hi = plain.bones[plain.bone("chest")].head[1];
+    const waist = (rig: RigT) => Math.min(...Array.from({ length: 12 }, (_, k) => half(rig, lo + 6 + ((hi - lo - 6) * k) / 11)));
+    const hips = (rig: RigT) => Math.max(...Array.from({ length: 8 }, (_, k) => half(rig, lo - 6 + (12 * k) / 7)));
+    const was = [waist(plain), hips(plain)], now = [waist(full), hips(full)];
+    // the waist narrower, the hips wider, and the one to the other well under what it was
+    expect([was[0] - now[0] > 0.8, now[1] - was[1] > 1, now[0] / now[1] < 0.9 * (was[0] / was[1])]).toEqual([true, true, true]);
+    // the buttocks carried further back
+    const back = (rig: RigT) => {
+      let x = Infinity;
+      for (let i = 0; i < rig.bodyVertices; i++) if (rig.tissues.buttL[i] > 0.5) x = Math.min(x, rig.rest[3 * i]);
+      return x;
+    };
+    expect(back(plain) - back(full)).toBeGreaterThan(3);
+    // taken off again, the body is the one it was
+    full.setAnatomy({ butt: 0, waist: 0 });
+    expect(maxMove(plain.rest, full.rest, Array(plain.bodyVertices).keys())).toBeLessThan(1e-4);
   });
 });
