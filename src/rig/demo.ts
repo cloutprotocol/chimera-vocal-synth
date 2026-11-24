@@ -136,12 +136,12 @@ const readAnatomy = (): AnatomyParams => ({
   butt: Number(field("butt").value),
 });
 
-/** Boost mesh polygon density (4× Catmull-Clark) automatically whenever fat, breast, or butt volume increases. */
+/** The skin drawn subdivided: twice over, with finer lines where its quads are big, once fat, breast or butt is up (view.ts, `subdivide`). */
 const syncMeshDetail = () => {
   if (!view || !rig) return;
   const a = rig.anatomy;
   const curvy = Math.max(a.fat, a.breast, a.butt);
-  view.subdivide = curvy >= 0.35 ? 1 : 0;
+  view.subdivide = curvy >= 0.35 ? 2 : 1;
 };
 
 const applyViewMode = (mode: ViewMode) => {
@@ -450,7 +450,7 @@ renderer.setAnimationLoop((now) => {
       .map((m) => `${m.name} ${(m.activation * 100).toFixed(0)}%`)
       .join(" · ");
     const qk = (view.quadCount / 1000).toFixed(1);
-    const subTag = view.subdivide ? " · 4× CC" : "";
+    const subTag = view.subdivide ? ` · CC ×${view.subdivide}` : "";
     hud.innerHTML =
       `<span class="title">CHIMERA // RIG</span> <span class="dim">· ${currentSex} · ${motion ? "clip" : sel} · ${qk}K quads${subTag}</span><br>` +
       `<span class="pk">TISSUE Δ</span> breast ${(Math.max(bL, bR) * 10).toFixed(1)} mm · butt ${(Math.max(gL, gR) * 10).toFixed(1)} mm${pTxt}<br>` +

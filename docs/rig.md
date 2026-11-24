@@ -20,7 +20,7 @@ or play a motion file from another tool).
 | `src/rig/muscles.ts` | `MuscleSystem`: 30 anatomical muscles with contraction bulging & CHIMERA vector fiber rendering |
 | `src/rig/walk.ts` | `walkFrame`: procedural biomechanical walking, catwalk and jog gait with EMG muscle loads |
 | `src/rig/motion.ts` | `Motion`: a clip from another tool (Mixamo's FBX, BVH, glTF) carried over onto the rig |
-| `src/rig/view.ts` | the wireframe in CHIMERA's blue (with adaptive 4× Catmull-Clark subdivision, heat & weights views) |
+| `src/rig/view.ts` | the wireframe in CHIMERA's blue (drawn as the mesh, or its Catmull-Clark subdivision once or twice over: `subdivide`), heat & weights views |
 | `src/rig/body.rig.bin` | the mesh, skeleton, weights, morphs and tissue masks (generated: `bun tools/rig/gen-body.ts`, never edited) |
 | `src/rig/demo.ts`, `rig.html` | the dev page (not in the app's build) |
 
@@ -96,6 +96,13 @@ is fitted to the model once.
   raised, or held across the body, is left where it is), and
   `walkFrame` takes it as its last argument. `PRESETS.neutral` stays anatomical zero. Motion from
   other tools isn't touched: a clip's arms are where its own body had them.
+- **The drawn skin (`view.subdivide`):** 0 draws the mesh as it is; 1 its Catmull-Clark subdivision,
+  four quads to each; 2 that again, so every curve is drawn sixteen times as fine. The surface is
+  brought through the mesh's own vertices (the mesh is moved out by what the smoothing takes, so
+  the surface stays smooth), within 2.5 mm, and so stays under the head's lines, the muscles and
+  the tissue's rings. At 2 the lines are sixteen to the quad only where the mesh's quads are
+  big (`fineOver`, 3.4 cm: the breasts, buttocks and hips of a full body), four elsewhere, so
+  they stay about as far apart all over. An update costs 0.3 ms, 1.6 ms and 4.4 ms.
 - **Soft-tissue physics (`src/rig/physics.ts`):** 3-DOF damped spring-mass oscillators on the
   breasts (`breastL`/`R`, from MPFB2's `breast.L`/`R` vertex groups), buttocks (`buttL`/`R`, from
   MakeHuman's buttocks volume target, split at the midline with ipsilateral thigh coupling) and

@@ -102,6 +102,8 @@ interface SubdivCache {
   /** per-vertex incident neighbors and faces, packed CSR */
   readonly vNearOff: Uint32Array;
   readonly vNear: Uint32Array;
+  /** the edge to each of those neighbours, in step with `vNear` */
+  readonly vEdge: Uint32Array;
   readonly vFaceOff: Uint32Array;
   readonly vFace: Uint32Array;
   /** open-edge neighbors per vertex (-1 if interior) */
@@ -112,13 +114,10 @@ interface SubdivCache {
   readonly corner: Uint32Array;
   readonly pos: Float32Array;
   readonly norm: Float32Array;
-  /** how far each of the mesh's own vertices was smoothed off its place (xyz), to put it back */
-  readonly shift: Float32Array;
   readonly geo: THREE.BufferGeometry;
 }
 
-function buildSubdiv(rig: Rig): SubdivCache {
-  const { n, nq, quads: Q } = rig;
+function buildSubdiv(n: number, nq: number, Q: Uint32Array): SubdivCache {
   const edgeMap = new Map<number, number>();
   const eAList: number[] = [], eBList: number[] = [], eF0List: number[] = [], eF1List: number[] = [];
   const edgeKey = (a: number, b: number) => Math.min(a, b) * 1048576 + Math.max(a, b);
@@ -147,12 +146,15 @@ function buildSubdiv(rig: Rig): SubdivCache {
   const eF0 = Int32Array.from(eF0List), eF1 = Int32Array.from(eF1List);
 
   const nearList: number[][] = Array.from({ length: n }, () => []);
+  const edgeList: number[][] = Array.from({ length: n }, () => []);
   const faceList: number[][] = Array.from({ length: n }, () => []);
   const vOpen0 = new Int32Array(n).fill(-1), vOpen1 = new Int32Array(n).fill(-1);
   for (let ei = 0; ei < ne; ei++) {
     const a = eA[ei], b = eB[ei];
     nearList[a].push(b);
     nearList[b].push(a);
+    edgeList[a].push(ei);
+    edgeList[b].push(ei);
     if (eF1[ei] < 0) {
       if (vOpen0[a] < 0) vOpen0[a] = b;
       else vOpen1[a] = b;
@@ -172,9 +174,10 @@ function buildSubdiv(rig: Rig): SubdivCache {
   }
   vNearOff[n] = totalNear;
   vFaceOff[n] = totalFace;
-  const vNear = new Uint32Array(totalNear), vFace = new Uint32Array(totalFace);
+  const vNear = new Uint32Array(totalNear), vEdge = new Uint32Array(totalNear), vFace = new Uint32Array(totalFace);
   for (let i = 0; i < n; i++) {
     vNear.set(nearList[i], vNearOff[i]);
+    vEdge.set(edgeList[i], vNearOff[i]);
     vFace.set(faceList[i], vFaceOff[i]);
   }
 
@@ -211,7 +214,7 @@ function buildSubdiv(rig: Rig): SubdivCache {
   geo.setAttribute("heat", new THREE.BufferAttribute(new Float32Array(N), 1).setUsage(THREE.DynamicDrawUsage));
   geo.setAttribute("tint", new THREE.BufferAttribute(new Float32Array(3 * N), 3));
   geo.setAttribute("tone", new THREE.BufferAttribute(new Float32Array(N), 1));
-  return { n, nq, ne, nSub, nqSub, eA, eB, eF0, eF1, vNearOff, vNear, vFaceOff, vFace, vOpen0, vOpen1, quads, corner, pos: new Float32Array(3 * nSub), norm: new Float32Array(3 * nSub), shift: new Float32Array(3 * n), geo };
+  return { n, nq, ne, nSub, nqSub, eA, eB, eF0, eF1, vNearOff, vNear, vEdge, vFaceOff, vFace, vOpen0, vOpen1, quads, corner, pos: new Float32Array(3 * nSub), norm: new Float32Array(3 * nSub), geo };
 }
 
 /** evaluate Catmull-Clark stencil on a flat `stride`-component array (1 for tone, 3 for xyz/tint) */
@@ -259,27 +262,48 @@ function evalSubdiv(s: SubdivCache, Q: Uint32Array, src: ArrayLike<number>, stri
 }
 
 /**
- * Put the subdivided surface back through the mesh it was made from. Catmull-Clark smooths a
- * mesh inwards: a full breast's apex drew 1.4 cm inside its own vertices, the nose's tip 0.75,
- * and the lips' cut 0.2 cm off the lips the head draws, while the head's lines, the muscles and
- * the tissue's rings stayed on the mesh. Each of the mesh's vertices goes back where it was, and
- * each new point moves by the mean of its corners' moves, so the surface stays as smooth.
+ * The cage whose Catmull-Clark surface passes through the mesh's own vertices. Subdividing the
+ * mesh itself smooths it inwards: a full breast's apex drew 1.4 cm inside its own vertices, the
+ * nose's tip 0.75, and the lips' cut 0.2 cm off the lips the head draws, while the head's lines,
+ * the muscles and the tissue's rings stayed on the mesh. So each vertex is moved out by what the
+ * smoothing took from it, `rounds` times over (what is left shrinks by more than half each time).
+ * The surface stays a smooth one: putting each vertex back after the smoothing, and its
+ * neighbours by the mean of their corners' moves, left a crease along every edge of the mesh, a
+ * buttock of thirty quads drawn pointed.
+ *
+ * `limit`: what it is brought through the mesh is the surface that subdividing on and on comes
+ * to, not the first subdivision (for drawing two levels: the second smooths the first inwards
+ * again, 0.65 cm). A vertex's place on that surface is read off the first subdivision round it:
+ * (n² V + 4 ΣE + ΣF) / (n (n + 5)), of its own point, its n edges' and its n quads'.
  */
-function throughMesh(s: SubdivCache, Q: Uint32Array, src: ArrayLike<number>, out: Float32Array): void {
-  const { n, nq, ne, eA, eB, shift } = s;
-  for (let i = 0; i < 3 * n; i++) {
-    shift[i] = src[i] - out[i];
-    out[i] = src[i];
-  }
-  for (let f = 0; f < nq; f++) {
-    const a = 3 * Q[4 * f], b = 3 * Q[4 * f + 1], c = 3 * Q[4 * f + 2], d = 3 * Q[4 * f + 3], o = 3 * (n + f);
-    for (let k = 0; k < 3; k++) out[o + k] += 0.25 * (shift[a + k] + shift[b + k] + shift[c + k] + shift[d + k]);
-  }
-  for (let ei = 0; ei < ne; ei++) {
-    const a = 3 * eA[ei], b = 3 * eB[ei], o = 3 * (n + nq + ei);
-    for (let k = 0; k < 3; k++) out[o + k] += 0.5 * (shift[a + k] + shift[b + k]);
+function cageThrough(s: SubdivCache, Q: Uint32Array, src: ArrayLike<number>, cage: Float32Array, limit: boolean, rounds = limit ? 4 : 3): void {
+  const { n, nq, vNearOff, vEdge, vFaceOff, vFace, vOpen0, pos } = s, m = 3 * n;
+  for (let i = 0; i < m; i++) cage[i] = src[i];
+  for (let r = 0; r < rounds; r++) {
+    evalSubdiv(s, Q, cage, 3, pos);
+    for (let v = 0; v < n; v++) {
+      const o = 3 * v, e0 = vNearOff[v], e1 = vNearOff[v + 1], f0 = vFaceOff[v], f1 = vFaceOff[v + 1], k = e1 - e0;
+      // on an open edge, or not all round with quads: the first subdivision's own point
+      const whole = limit && vOpen0[v] < 0 && k > 0 && f1 - f0 === k;
+      for (let c = 0; c < 3; c++) {
+        let at = pos[o + c];
+        if (whole) {
+          let E = 0, F = 0;
+          for (let j = e0; j < e1; j++) E += pos[3 * (n + nq + vEdge[j]) + c];
+          for (let j = f0; j < f1; j++) F += pos[3 * (n + vFace[j]) + c];
+          at = (k * k * at + 4 * E + F) / (k * (k + 5));
+        }
+        cage[o + c] += src[o + c] - at;
+      }
+    }
   }
 }
+
+/** where each corner of a quad's four children sits in the quad's own square (child, corner, xy) */
+const IN_PARENT: number[][][] = (() => {
+  const P = [[0, 0], [1, 0], [1, 1], [0, 1]], mid = (a: number[], b: number[]) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  return [0, 1, 2, 3].map((j) => [P[j], mid(P[j], P[(j + 1) % 4]), [0.5, 0.5], mid(P[(j + 3) % 4], P[j])]);
+})();
 
 function quadNormals(n: number, nq: number, Q: Uint32Array, P: Float32Array, out: Float32Array): void {
   out.fill(0);
@@ -313,7 +337,25 @@ export class RigView {
   /** each corner's vertex */
   private readonly corner: Uint32Array;
   private sub: SubdivCache | null = null;
-  private subdivLevel: 0 | 1 = 0;
+  /** the second level: the first's own subdivision */
+  private sub2: SubdivCache | null = null;
+  private subdivLevel: 0 | 1 | 2 = 0;
+  /** the mesh moved out so its subdivision passes through it (xyz) */
+  private cage: Float32Array | null = null;
+  /** which of the mesh's quads are drawn at the second level's fineness, and how many */
+  private fine: Uint8Array | null = null;
+  private fineCount = -1;
+  /**
+   * At level 2, a quad of the mesh this many cm across or more (at rest, as the anatomy has
+   * shaped it) has its lines drawn sixteen to the quad; the rest keep four, though the surface
+   * under them is as fine. So the lines stay about as far apart all over the body, and a shape
+   * that grows (a breast is ten quads of the mesh, 4 cm across and more) gets the lines it needs.
+   * A quad's size is taken with its neighbours' (the mean round each of its corners, twice over),
+   * so the fine lines come in whole regions and not quad by quad, a patchwork.
+   */
+  fineOver = 3.4;
+  private size: Float32Array | null = null;
+  private around: Float32Array | null = null;
   private lastWeightBone = -1;
 
   constructor(readonly rig: Rig) {
@@ -387,34 +429,100 @@ export class RigView {
   set alpha(a: number) {
     for (const m of [this.mat, this.backMat]) m.uniforms.uAlpha.value = a;
   }
-  /** 0: base mesh; 1: real-time 4× Catmull-Clark subdivision for smooth high-polygon curves */
-  get subdivide(): 0 | 1 {
+  /**
+   * 0: the mesh as it is. 1: its Catmull-Clark subdivision, four quads to each, through the
+   * mesh's own vertices. 2: that subdivided again, so every curve is drawn sixteen times as fine,
+   * with the lines sixteen to the quad only where the mesh's quads are big (`fineOver`).
+   */
+  get subdivide(): 0 | 1 | 2 {
     return this.subdivLevel;
   }
-  set subdivide(level: 0 | 1) {
+  set subdivide(level: 0 | 1 | 2) {
     if (level === this.subdivLevel) return;
     this.subdivLevel = level;
-    if (level === 1 && !this.sub) {
-      this.sub = buildSubdiv(this.rig);
+    const made = (level >= 1 && !this.sub) || (level === 2 && !this.sub2);
+    if (level >= 1 && !this.sub) {
+      this.sub = buildSubdiv(this.rig.n, this.rig.nq, this.rig.quads);
+      this.cage = new Float32Array(3 * this.rig.n);
+    }
+    if (level === 2 && !this.sub2) {
+      this.sub2 = buildSubdiv(this.sub!.nSub, this.sub!.nqSub, this.sub!.quads);
+      this.fine = new Uint8Array(this.rig.nq);
+      this.fineCount = -1;
+    }
+    if (made) {
       this.toneChanged();
       this.weightsOf(this.lastWeightBone);
     }
-    const g = level === 1 ? this.sub!.geo : this.geo;
-    this.front.geometry = this.back.geometry = g;
+    this.front.geometry = this.back.geometry = level === 2 ? this.sub2!.geo : level === 1 ? this.sub!.geo : this.geo;
   }
   /** the subdivided surface as last drawn (xyz; its first `rig.n` points are the mesh's own vertices), or null when the mesh is drawn as it is */
   get subdivided(): Float32Array | null {
-    return this.subdivLevel === 1 && this.sub ? this.sub.pos : null;
+    return this.subdivLevel === 2 && this.sub2 ? this.sub2.pos : this.subdivLevel === 1 && this.sub ? this.sub.pos : null;
   }
-  /** current rendered quad count (4× when subdivided) */
+  /** how many quads the lines draw (four to each of the mesh's when subdivided, sixteen where it is drawn fine) */
   get quadCount(): number {
-    return this.subdivLevel === 1 && this.sub ? this.sub.nqSub : this.rig.nq;
+    return this.subdivLevel === 0 || !this.sub ? this.rig.nq : 4 * this.rig.nq + (this.subdivLevel === 2 ? 12 * Math.max(0, this.fineCount) : 0);
+  }
+
+  /** at level 2: which of the mesh's quads are big enough to draw fine, and the lines laid out for it when that has changed */
+  private layFine(): void {
+    const rig = this.rig, s2 = this.sub2!, fine = this.fine!, R = rig.rest, Q = rig.quads;
+    const far = (a: number, b: number) => Math.hypot(R[3 * a] - R[3 * b], R[3 * a + 1] - R[3 * b + 1], R[3 * a + 2] - R[3 * b + 2]);
+    // each quad's size, then each corner's (the mean of the quads round it), then each quad's again from its corners'
+    const size = (this.size ??= new Float32Array(rig.nq)), around = (this.around ??= new Float32Array(2 * rig.n));
+    around.fill(0);
+    for (let f = 0; f < rig.nq; f++) {
+      const a = Q[4 * f], b = Q[4 * f + 1], c = Q[4 * f + 2], d = Q[4 * f + 3];
+      size[f] = (far(a, b) + far(b, c) + far(c, d) + far(d, a)) / 4;
+      for (const v of [a, b, c, d]) {
+        around[2 * v] += size[f];
+        around[2 * v + 1]++;
+      }
+    }
+    const spread = () => {
+      for (let f = 0; f < rig.nq; f++) {
+        let sum = 0;
+        for (let j = 0; j < 4; j++) sum += around[2 * Q[4 * f + j]] / around[2 * Q[4 * f + j] + 1];
+        size[f] = sum / 4;
+      }
+    };
+    spread();
+    around.fill(0);
+    for (let f = 0; f < rig.nq; f++) {
+      for (let j = 0; j < 4; j++) {
+        around[2 * Q[4 * f + j]] += size[f];
+        around[2 * Q[4 * f + j] + 1]++;
+      }
+    }
+    spread();
+    let count = 0, changed = this.fineCount < 0;
+    for (let f = 0; f < rig.nq; f++) {
+      const on = size[f] >= this.fineOver ? 1 : 0;
+      if (on !== fine[f]) changed = true;
+      fine[f] = on;
+      count += on;
+    }
+    if (!changed) return;
+    this.fineCount = count;
+    // a quad not drawn fine has its sixteen share four squares' lines: each takes its place in its parent's square
+    const QA = s2.geo.getAttribute("q") as THREE.BufferAttribute, A = QA.array as Float32Array;
+    const AT = [[0, 0], [1, 0], [1, 1], [0, 1]], TRI = [0, 1, 2, 0, 2, 3];
+    for (let g = 0; g < s2.nqSub; g++) {
+      const at = fine[g >> 4] ? AT : IN_PARENT[g & 3];
+      for (let k = 0; k < 6; k++) {
+        A[2 * (6 * g + k)] = at[TRI[k]][0];
+        A[2 * (6 * g + k) + 1] = at[TRI[k]][1];
+      }
+    }
+    QA.needsUpdate = true;
   }
 
   /** free the GPU's copies of its geometry and materials (take `group` out of the scene too) */
   dispose(): void {
     this.geo.dispose();
     this.sub?.geo.dispose();
+    this.sub2?.geo.dispose();
     for (const m of [this.mat, this.backMat]) m.dispose();
     for (const o of [this.bones, this.joints]) {
       o.geometry.dispose();
@@ -433,6 +541,13 @@ export class RigView {
       const ST = this.sub.geo.getAttribute("tone") as THREE.BufferAttribute, SA = ST.array as Float32Array;
       for (let c = 0; c < this.sub.corner.length; c++) SA[c] = subTone[this.sub.corner[c]];
       ST.needsUpdate = true;
+      if (this.sub2) {
+        const tone2 = new Float32Array(this.sub2.nSub);
+        evalSubdiv(this.sub2, this.sub.quads, subTone, 1, tone2);
+        const T2 = this.sub2.geo.getAttribute("tone") as THREE.BufferAttribute, A2 = T2.array as Float32Array;
+        for (let c = 0; c < this.sub2.corner.length; c++) A2[c] = tone2[this.sub2.corner[c]];
+        T2.needsUpdate = true;
+      }
     }
   }
 
@@ -466,16 +581,28 @@ export class RigView {
       const ST = this.sub.geo.getAttribute("tint") as THREE.BufferAttribute, SA = ST.array as Float32Array;
       for (let c = 0; c < this.sub.corner.length; c++) SA.set(subTint.subarray(3 * this.sub.corner[c], 3 * this.sub.corner[c] + 3), 3 * c);
       ST.needsUpdate = true;
+      if (this.sub2) {
+        const tint2 = new Float32Array(3 * this.sub2.nSub);
+        evalSubdiv(this.sub2, this.sub.quads, subTint, 3, tint2);
+        const T2 = this.sub2.geo.getAttribute("tint") as THREE.BufferAttribute, A2 = T2.array as Float32Array;
+        for (let c = 0; c < this.sub2.corner.length; c++) A2.set(tint2.subarray(3 * this.sub2.corner[c], 3 * this.sub2.corner[c] + 3), 3 * c);
+        T2.needsUpdate = true;
+      }
     }
   }
 
   /** draw the mesh at `posed` (call after rig.skin into view.posed), with each quad's heat */
   update(heat?: Float32Array): void {
     const rig = this.rig, P = this.posed;
-    if (this.subdivLevel === 1 && this.sub) {
-      const s = this.sub;
-      evalSubdiv(s, rig.quads, P, 3, s.pos);
-      throughMesh(s, rig.quads, P, s.pos);
+    if (this.subdivLevel >= 1 && this.sub) {
+      const s1 = this.sub, two = this.subdivLevel === 2 && this.sub2 !== null;
+      cageThrough(s1, rig.quads, P, this.cage!, two);
+      evalSubdiv(s1, rig.quads, this.cage!, 3, s1.pos);
+      if (two) {
+        evalSubdiv(this.sub2!, s1.quads, s1.pos, 3, this.sub2!.pos);
+        this.layFine();
+      }
+      const s = two ? this.sub2! : s1, per = two ? 96 : 24;
       quadNormals(s.nSub, s.nqSub, s.quads, s.pos, s.norm);
       // the mesh's own normals are kept up either way: others read them
       vertexNormals(rig, P, this.normals);
@@ -489,7 +616,7 @@ export class RigView {
         NN[3 * c] = s.norm[v];
         NN[3 * c + 1] = s.norm[v + 1];
         NN[3 * c + 2] = s.norm[v + 2];
-        if (heat) HH[c] = heat[Math.floor(c / 24)];
+        if (heat) HH[c] = heat[Math.floor(c / per)];
       }
       gp.needsUpdate = gn.needsUpdate = true;
       if (heat) gh.needsUpdate = true;
