@@ -12,7 +12,7 @@ or play a motion file from another tool).
 
 | | |
 |---|---|
-| `src/rig/rig.ts` | the rig: loading, anatomy morphs (male/female, fat, muscle, breast, butt), posing, skinning |
+| `src/rig/rig.ts` | the rig: loading, anatomy morphs (male/female, fat, muscle, breast, butt, waist), posing, skinning |
 | `src/rig/pose.ts` | the `Pose` type (anatomical angles), ranges of motion, presets |
 | `src/rig/head.ts` | `wearHead`: the head's skin grown from the neck, the head's lines on the head bone, the face moving |
 | `src/rig/physics.ts` | `SoftTissue`: 3-DOF damped spring-mass fat & jiggle physics for breasts, buttocks and belly |
@@ -85,8 +85,10 @@ is fitted to the model once.
   joints and neck rim), body fat, muscularity, breast cup volume and gluteal volume (`rig.setAnatomy`).
   Every one at 0 is the body as it was before there were any, byte for byte (a test pins it), and
   the bodies are adults: MakeHuman's "young" (adult) targets only, none of its child ones. The
-  breast is MakeHuman's largest cup between its average and firm shapes, the buttocks its volume
-  target a third past full with some of its wider hip: its artists' shapes, not ones made here.
+  breast is MakeHuman's largest cup between its average and firm shapes; `butt` is the buttocks
+  with the hips and thighs they sit on (its buttocks volume a quarter past full, its hips deeper
+  and a little higher, half of its hips' and thighs' girth), and `waist` draws the waist in (its
+  waist measure and a toned stomach): its artists' shapes, mixed, not ones made here.
   `female` moves the skeleton and the neck's rim, so it is set before `wearHead`; the other four
   move live with the head on (they fade out under the rim, and only the change in shape is added
   to the rest mesh, which the head has fitted its neck into).
@@ -100,15 +102,17 @@ is fitted to the model once.
   four quads to each; 2 that again, so every curve is drawn sixteen times as fine. The surface is
   brought through the mesh's own vertices (the mesh is moved out by what the smoothing takes, so
   the surface stays smooth), within 2.5 mm, and so stays under the head's lines, the muscles and
-  the tissue's rings. At 2 the lines are sixteen to the quad only where the mesh's quads are
-  big (`fineOver`, 3.4 cm: the breasts, buttocks and hips of a full body), four elsewhere, so
-  they stay about as far apart all over. An update costs 0.3 ms, 1.6 ms and 4.4 ms.
+  the tissue's rings. At 2 the lines are sixteen to the quad where the mesh's quads are big
+  (`fineOver`, 3.2 cm: the breasts, buttocks and hips of a full body), four elsewhere, the finer
+  ones coming in by degrees between, so they stay about as far apart all over. An update costs 0.3 ms, 1.6 ms and 4.4 ms.
 - **Soft-tissue physics (`src/rig/physics.ts`):** 3-DOF damped spring-mass oscillators on the
   breasts (`breastL`/`R`, from MPFB2's `breast.L`/`R` vertex groups), buttocks (`buttL`/`R`, from
   MakeHuman's buttocks volume target, split at the midline with ipsilateral thigh coupling) and
   abdominal adipose (`belly`). Integrates in world space (4 symplectic substeps/frame) with
   anatomical inward collision clamping and volume-preserving squash-and-stretch. Standing still,
-  a region stays where the mesh has it: the shapes were drawn hanging under gravity already. The
+  a region stays where the mesh has it: the shapes were drawn hanging under gravity already. A
+  region's skin follows its centre late, the later the nearer its middle, so a jolt runs through
+  it as a wave and it doesn't move as a block. The
   springs are damped against the body, so one that travels through a scene carries its tissue
   with it.
 - **Muscle system (`src/rig/muscles.ts`):** 30 superficial anatomical muscles (15 bilateral pairs)
