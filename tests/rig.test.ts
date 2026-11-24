@@ -920,4 +920,16 @@ describe("the shaped body and the rest of the rig", () => {
     view.dispose();
     model.dispose();
   });
+
+  test("a refused change of sex leaves the anatomy as it was (the rest of what was asked stayed set, on a body that hadn't moved)", () => {
+    const rig = loadRig();
+    rig.setAnatomy({ female: 1, fat: 0.2 });
+    const model = new M.VoiceModel(M.BODIES.female, 48000);
+    M.head.wearHead(rig, model);
+    const was = { ...rig.anatomy }, rest = rig.rest.slice();
+    expect(() => rig.setAnatomy({ female: 0, fat: 1.2, breast: 1 })).toThrow("before wearHead");
+    expect(rig.anatomy).toEqual(was);
+    expect(maxMove(rest, rig.rest, Array(rig.n).keys())).toBe(0);
+    model.dispose();
+  });
 });

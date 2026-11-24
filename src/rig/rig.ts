@@ -245,19 +245,16 @@ export class Rig {
     const a = this.header.anatomy;
     if (!a) return;
     const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
-    const prevFemale = this.anatomy.female;
-    if (params.female !== undefined) this.anatomy.female = clamp(params.female, 0, 1);
+    const prevFemale = this.anatomy.female, f = params.female !== undefined ? clamp(params.female, 0, 1) : prevFemale;
+    const femaleChanged = Math.abs(f - prevFemale) > 1e-6;
+    // refused before anything is taken (the rest of what was asked stayed set, on a body that hadn't moved)
+    if (femaleChanged && this.n > this.bodyVertices) throw new Error("setAnatomy: `female` moves the skeleton and the neck's rim, which the head was fitted to; set it before wearHead");
+    this.anatomy.female = f;
     if (params.fat !== undefined) this.anatomy.fat = clamp(params.fat, 0, 1.5);
     if (params.muscle !== undefined) this.anatomy.muscle = clamp(params.muscle, 0, 1.5);
     if (params.breast !== undefined) this.anatomy.breast = clamp(params.breast, 0, 1.5);
     if (params.butt !== undefined) this.anatomy.butt = clamp(params.butt, 0, 1.5);
 
-    const f = this.anatomy.female;
-    const femaleChanged = Math.abs(f - prevFemale) > 1e-6;
-    if (femaleChanged && this.n > this.bodyVertices) {
-      this.anatomy.female = prevFemale;
-      throw new Error("setAnatomy: `female` moves the skeleton and the neck's rim, which the head was fitted to; set it before wearHead");
-    }
     const active: [Float32Array, number][] = [];
     for (const [k, w] of [
       ["female", this.anatomy.female],
@@ -271,7 +268,9 @@ export class Rig {
     const len = 3 * this.bodyVertices;
     // the rest mesh takes the change in shape, not the shape: wearHead has fitted the neck since
     // (rebuilt from the file's mesh, the rim sprang back 2 cm under the head at the first slider).
-    // The cached centres of rotation go along with their vertices.
+    // The cached centres of rotation go along with their vertices: near enough while a slider is
+    // dragged (up to 0.6 cm off in an extreme pose), and `weightsChanged()` works them out afresh
+    // (0.1 s) once it rests.
     const cor = femaleChanged ? null : this.corCache;
     for (let i = 0; i < len; i++) {
       let to = 0;
