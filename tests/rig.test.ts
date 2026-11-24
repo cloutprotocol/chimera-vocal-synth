@@ -775,15 +775,21 @@ describe("the shaped body and the rest of the rig", () => {
         expect([name, style, worst < 0.5]).toEqual([name, style, true]);
       }
     }
-    // an arm already further out, or raised, is left where it is
-    const { PRESETS, armsOut } = M.pose;
-    for (const p of Object.values(PRESETS)) {
+    // an arm already further out is left where it is, and so is one that doesn't hang at the side:
+    // raised, or across the body (held out regardless, twist & look's arm across the chest went 21 cm off it)
+    const { PRESETS, armsOut, pose } = M.pose;
+    const out = (a: Pose["arms"]["R"]) => a.raise * Math.cos((a.plane * Math.PI) / 180);
+    for (const [name, p] of Object.entries(PRESETS)) {
       for (const s of ["R", "L"] as const) {
         const a = p.arms[s], b = armsOut(p, 8).arms[s];
-        if (a.raise >= 90 || a.raise * Math.cos((a.plane * Math.PI) / 180) >= 8) expect(b).toEqual(a);
-        else expect(b.raise * Math.cos((b.plane * Math.PI) / 180)).toBeCloseTo(8, 6);
+        if (a.raise >= 45 || Math.abs(a.plane) >= 90 || out(a) >= 8) expect([name, s, b]).toEqual([name, s, a]);
+        else expect([name, s, out(b) >= out(a) - 1e-9 && out(b) <= 8 + 1e-9]).toEqual([name, s, true]);
       }
     }
+    expect(out(armsOut(PRESETS.neutral, 8).arms.R)).toBeCloseTo(8, 6);
+    expect(out(armsOut(pose({ bothArms: { raise: 8, plane: 40 } }), 8).arms.L)).toBeCloseTo(8, 6);
+    const across = pose({ bothArms: { raise: 40, plane: 120, elbow: 90 } });
+    expect(armsOut(across, 8)).toEqual(across);
   });
 
   test("a clip from another tool lands on a shaped female body as it does on the file's", async () => {

@@ -114,15 +114,20 @@ export function pose(p: DeepPartial<Pose> & { bothArms?: Partial<Arm>; bothLegs?
 }
 
 /**
- * `p` with each arm at least `deg` out to the side where it hangs lower than level: a body's own
+ * `p` with each arm that hangs at the side held at least `deg` out from it: a body's own
  * clearance (rig.ts, `armClearance`), so the hands don't hang inside the hips. An arm already
- * further out keeps its place, and what it has forward or back is kept.
+ * further out keeps its place, and what it has forward or back is kept. An arm that doesn't hang
+ * there is left alone: one raised (all of `deg` up to 30 degrees, none of it by 45), or held
+ * in front of the body or behind it (all of it out to 60 degrees round, none by 90: held out
+ * regardless, an arm across the chest was carried 21 cm off it).
  */
 export function armsOut(p: Pose, deg: number): Pose {
+  const part = (x: number) => Math.max(0, Math.min(1, x));
   const held = (a: Arm): Arm => {
     const t = (a.plane * Math.PI) / 180, out = a.raise * Math.cos(t), swing = a.raise * Math.sin(t);
-    if (a.raise >= 90 || out >= deg) return a;
-    return { ...a, raise: Math.hypot(swing, deg), plane: (Math.atan2(swing, deg) * 180) / Math.PI };
+    const need = deg * part((45 - a.raise) / 15) * part((90 - Math.abs(a.plane)) / 30);
+    if (need <= 0 || out >= need) return a;
+    return { ...a, raise: Math.hypot(swing, need), plane: (Math.atan2(swing, need) * 180) / Math.PI };
   };
   return { ...p, arms: { R: held(p.arms.R), L: held(p.arms.L) } };
 }

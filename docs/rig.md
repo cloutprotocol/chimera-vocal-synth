@@ -92,7 +92,8 @@ is fitted to the model once.
   to the rest mesh, which the head has fitted its neck into).
 - **Arms that clear the body:** at anatomical zero a hand hangs inside the thigh's side (3 cm on
   the file's body, 6 on wide hips). `armClearance(rig)` measures how far out the arms have to hang
-  for the body as it's shaped, a centimetre clear of it; `armsOut(pose, deg)` holds a pose's hanging arms that far out, and
+  for the body as it's shaped, a centimetre clear of it; `armsOut(pose, deg)` holds a pose's hanging arms that far out (an arm
+  raised, or held across the body, is left where it is), and
   `walkFrame` takes it as its last argument. `PRESETS.neutral` stays anatomical zero. Motion from
   other tools isn't touched: a clip's arms are where its own body had them.
 - **Soft-tissue physics (`src/rig/physics.ts`):** 3-DOF damped spring-mass oscillators on the
