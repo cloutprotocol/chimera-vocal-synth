@@ -49,6 +49,7 @@ uniform vec3 uEdge;
 uniform float uMode;
 uniform float uBack;
 uniform float uAlpha;
+uniform float uThin;
 varying vec2 vQ;
 varying vec2 vQ2;
 varying float vFine;
@@ -57,11 +58,15 @@ varying vec3 vV;
 varying float vHeat;
 varying vec3 vTint;
 varying float vTone;
-// a line along the edges of the square q runs over, fading where the squares get too small on screen to tell apart
+// a line along the edges of the square q runs over, fading where the squares get too small on screen to tell apart.
+// uThin: each way's lines fade by how close those lines are, not by the square's lesser side (a mesh
+// with long thin quads, as the rings round a breast are seen from a distance, otherwise loses both
+// ways' lines there and shows a dark patch)
 float wireOf(vec2 q) {
   vec2 fw = max(fwidth(q), vec2(1e-6));
   vec2 dq = min(q, 1.0 - q) / fw;
-  return (1.0 - smoothstep(0.35, 1.15, min(dq.x, dq.y))) * (1.0 - smoothstep(0.16, 0.42, max(fw.x, fw.y)));
+  vec2 each = (1.0 - smoothstep(0.35, 1.15, dq)) * (1.0 - smoothstep(0.16, 0.42, fw));
+  return mix((1.0 - smoothstep(0.35, 1.15, min(dq.x, dq.y))) * (1.0 - smoothstep(0.16, 0.42, max(fw.x, fw.y))), max(each.x, each.y), uThin);
 }
 vec3 heatColour(float h) {
   // calm to sore: the look's own line colour, then amber, red, white-hot
@@ -399,6 +404,7 @@ export class RigView {
       uMode: { value: 0 },
       uBack: { value: 0 },
       uAlpha: { value: 0.92 },
+      uThin: { value: rig.detail ? 1 : 0 },
     });
     this.mat = new THREE.ShaderMaterial({ vertexShader: VERT, fragmentShader: FRAG, uniforms: uniforms(), transparent: true, side: THREE.FrontSide });
     this.backMat = new THREE.ShaderMaterial({ vertexShader: VERT, fragmentShader: FRAG, uniforms: uniforms(), transparent: true, side: THREE.BackSide, depthWrite: false });

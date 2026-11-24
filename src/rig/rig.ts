@@ -150,6 +150,8 @@ export class Rig {
   readonly tissueDefs: TissueDef[] = [];
   /** current anatomy morph weights */
   readonly anatomy: AnatomyParams = { ...ANATOMY_DEFAULT };
+  /** whether this is the detail mesh (`RigOptions.detail`) */
+  readonly detail: boolean;
   quads: Uint32Array;
   skinIndex: Uint8Array;
   skinWeight: Float32Array;
@@ -228,7 +230,8 @@ export class Rig {
       o += a.tissues.length * n;
     }
     this.rim = header.rim;
-    if (options.detail) this.takeDetail(buf, o);
+    this.detail = Boolean(options.detail);
+    if (this.detail) this.takeDetail(buf, o);
     this.bones = header.bones;
     this.maleBones = header.bones.map((b) => ({ head: [...b.head], tail: [...b.tail] }));
     this.malePoints = Object.fromEntries(Object.entries(header.points).map(([k, v]) => [k, [...v]]));
