@@ -200,6 +200,19 @@ const fitSoon = () => {
   }, 150);
 };
 
+/** whether the body is on the mesh with the breasts' own loops, and whether a shape wants it */
+let meshDetail = false;
+const wantsDetail = (anatomy: AnatomyParams) => anatomy.breast >= 0.25;
+/** the body made again where it stands (another sex, or the other mesh): a clip under way was
+ *  carried onto the old rig, so it is read again for the new one (it kept posing the old, and
+ *  the new body stood unposed) */
+function rebuild(sex: "male" | "female", anatomy: AnatomyParams): void {
+  buildCharacter(sex, anatomy, true);
+  if (motion) {
+    motion = null;
+    void playClip(Number(field("clip").value) || 0);
+  }
+}
 function buildCharacter(sex: "male" | "female", anatomy: AnatomyParams, keepCamera = false): void {
   if (view) {
     scene.remove(view.group, head.mount, muscles.group, maleGeo.group);
@@ -210,7 +223,9 @@ function buildCharacter(sex: "male" | "female", anatomy: AnatomyParams, keepCame
     maleGeo.dispose();
   }
   currentSex = sex;
-  rig = new Rig(rigBuf.slice(0));
+  // the breasts' own loops for a body that has breasts (on a flat chest the loops lie crowded, with nothing to be round)
+  meshDetail = wantsDetail(anatomy);
+  rig = new Rig(rigBuf.slice(0), { detail: meshDetail });
   rig.setAnatomy({ ...anatomy, female: sex === "female" ? 1 : 0 });
   model = new VoiceModel(BODIES[sex], 48000);
   head = wearHead(rig, model, { look: HEAD_LOOKS[field("look").value] });
@@ -284,15 +299,8 @@ field("body").onchange = () => {
   field("penis").value = p.penis;
   field("jiggle").value = String(p.jiggle);
   syncSliderLabels();
-  if (p.voice !== currentSex) {
-    buildCharacter(p.voice, p.anatomy, true);
-    // a clip under way was carried onto the old rig: read again for the new one (it kept posing
-    // the old, and the new body stood unposed)
-    if (motion) {
-      motion = null;
-      void playClip(Number(field("clip").value) || 0);
-    }
-  } else {
+  if (p.voice !== currentSex || wantsDetail(p.anatomy) !== meshDetail) rebuild(p.voice, p.anatomy);
+  else {
     rig.setAnatomy(p.anatomy);
     armOut = armClearance(rig);
     tissue.settings.jiggle = p.jiggle;
@@ -316,6 +324,10 @@ for (const name of ["fat", "muscle", "breast", "butt", "waist"] as const) {
     syncMeshDetail();
   };
 }
+// the breast slider let go on the other side of where the loops come in: the body on the other mesh
+field("breast").onchange = () => {
+  if (wantsDetail(readAnatomy()) !== meshDetail) rebuild(currentSex, { ...readAnatomy(), female: currentSex === "female" ? 1 : 0 });
+};
 field("penis").onchange = () => {
   maleGeo.size = PENIS_SIZES[field("penis").value] ?? 0;
   maleGeo.reset();

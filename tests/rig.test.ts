@@ -987,32 +987,52 @@ describe("the shaped body and the rest of the rig", () => {
     expect(maxMove(plain.rest, full.rest, Array(plain.bodyVertices).keys())).toBeLessThan(1e-4);
   });
 
-  test("the breasts sit near the chest's middle and stay round to the slider's end (as MakeHuman drew them they sat 8.3 cm off it; carried on in a straight line past the cup as drawn, the front went flat, 9.6 cm tall)", () => {
-    const shaped = (breast: number) => {
-      const rig = loadRig();
+  test("the detail mesh rings each breast with loops and is round where the plain mesh is flat-fronted, and the plain mesh is the one it was (a breast was sixteen of the grid's quads: a flat front 8 cm tall with a corner above and below)", () => {
+    const b = readFileSync(new URL("../src/rig/body.rig.bin", import.meta.url));
+    const make = (detail: boolean, breast: number) => {
+      const rig = new M.Rig(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer, { detail });
       rig.setAnatomy({ female: 1, fat: 0.05, muscle: 0.35, breast, butt: 1.1, waist: 1 });
-      return rig.rest;
+      return rig;
     };
-    const none = shaped(0), n = loadRig().bodyVertices;
+    // one breast: the skin on one side that the slider moved; how tall its front is (what lies within 1 cm of its foremost point), and its longest edge
+    const breastOf = (detail: boolean, breast: number) => {
+      const rig = make(detail, breast), R = rig.rest, none = make(detail, 0).rest;
+      const own = [...Array(rig.bodyVertices).keys()].filter((i) => R[3 * i + 2] > 0 && Math.hypot(R[3 * i] - none[3 * i], R[3 * i + 1] - none[3 * i + 1], R[3 * i + 2] - none[3 * i + 2]) > 0.3);
+      const fore = Math.max(...own.map((i) => R[3 * i])), front = own.filter((i) => R[3 * i] > fore - 1), ys = front.map((i) => R[3 * i + 1]);
+      let edge = 0;
+      for (const i of own) for (const o of rig.near[i]) edge = Math.max(edge, Math.hypot(R[3 * i] - R[3 * o], R[3 * i + 1] - R[3 * o + 1], R[3 * i + 2] - R[3 * o + 2]));
+      return { verts: own.length, front: front.length, tall: Math.max(...ys) - Math.min(...ys), edge, fore };
+    };
+    const plain = loadRig(), fine = make(true, 0);
+    expect(make(false, 0).n).toBe(plain.n);
+    expect(fine.n).toBeGreaterThan(plain.n + 150);
+    // closed but for the neck's rim, which is the plain mesh's, and no pole of more edges than the plain mesh has
+    expect(openEdges(fine).length).toBe(openEdges(plain).length);
+    expect(fine.rim.length).toBe(plain.rim.length);
+    expect(Math.max(...fine.near.map((s) => s.length))).toBeLessThanOrEqual(Math.max(...plain.near.map((s) => s.length)));
     for (const breast of [0.9, 1.4]) {
-      const R = shaped(breast);
-      // one breast: the skin on one side that the slider moved
-      const own = [...Array(n).keys()].filter((i) => R[3 * i + 2] > 0 && Math.hypot(R[3 * i] - none[3 * i], R[3 * i + 1] - none[3 * i + 1], R[3 * i + 2] - none[3 * i + 2]) > 0.3);
-      // where its bulk is from the chest's middle: each vertex by how far forward it came
-      let side = 0, sum = 0;
-      for (const i of own) {
-        const out = Math.max(0, R[3 * i] - none[3 * i]);
-        side += out * R[3 * i + 2];
-        sum += out;
-      }
-      expect(side / sum).toBeGreaterThan(6.2);
-      expect(side / sum).toBeLessThan(7.8);
-      // its front: the vertices within 1 cm of the foremost. Round, they are a small patch
-      const fore = Math.max(...own.map((i) => R[3 * i])), ys = own.filter((i) => R[3 * i] > fore - 1).map((i) => R[3 * i + 1]);
-      expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(5);
-      // and neither crosses the middle
-      expect(Math.min(...own.map((i) => R[3 * i + 2]))).toBeGreaterThanOrEqual(0);
+      const p = breastOf(false, breast), d = breastOf(true, breast);
+      expect(d.verts).toBeGreaterThan(2.5 * p.verts);
+      // the plain mesh's front is three or four vertices, 8 cm or more apart; the detail mesh's a cap of ten, under 5 cm
+      expect([p.front < 6, p.tall > 7, d.front > 7, d.tall < 5.5]).toEqual([true, true, true, true]);
+      expect(d.edge).toBeLessThan(p.edge);
+      // and it stands further out: the plain mesh's quads cut the top off the dome
+      expect(d.fore).toBeGreaterThan(p.fore + 0.5);
     }
+    // it walks, jiggles and wears a head as the plain mesh does
+    const rig = make(true, 0.9), tissue = new M.physics.SoftTissue(rig), P = new Float32Array(3 * rig.n), Q = new Float32Array(3 * rig.n);
+    for (let f = 0; f < 120; f++) {
+      rig.pose(M.walk.walkFrame(f / 60, "jog", rig.anatomy).pose);
+      tissue.step(1 / 60);
+    }
+    rig.skin(P);
+    Q.set(P);
+    tissue.apply(Q);
+    const moved = maxMove(P, Q, Array(rig.bodyVertices).keys());
+    expect([moved > 0.5, moved < 4, Q.every(Number.isFinite)]).toEqual([true, true, true]);
+    const n0 = rig.n;
+    M.head.wearHead(rig, new M.VoiceModel(M.BODIES.female, 48000));
+    expect(rig.n).toBeGreaterThan(n0);
   });
 
   test("a jolt runs through the soft tissue as a wave, a buttock stays on the pelvis and a breast isn't thrown up the chest (moved as one piece, at full jiggle a buttock slid off in a lump, 5 cm, with a corner at the hip)", () => {
