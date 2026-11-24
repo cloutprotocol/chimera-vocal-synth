@@ -987,7 +987,7 @@ describe("the shaped body and the rest of the rig", () => {
     expect(maxMove(plain.rest, full.rest, Array(plain.bodyVertices).keys())).toBeLessThan(1e-4);
   });
 
-  test("a jolt runs through the soft tissue as a wave, and a buttock stays on the pelvis (moved as one piece, at full jiggle it slid off in a lump, 5 cm, with a corner at the hip)", () => {
+  test("a jolt runs through the soft tissue as a wave, a buttock stays on the pelvis and a breast isn't thrown up the chest (moved as one piece, at full jiggle a buttock slid off in a lump, 5 cm, with a corner at the hip)", () => {
     const rig = loadRig();
     rig.setAnatomy({ female: 1, fat: 0.05, muscle: 0.35, breast: 0.85, butt: 1, waist: 1 });
     const tissue = new M.physics.SoftTissue(rig);
@@ -1012,6 +1012,16 @@ describe("the shaped body and the rest of the rig", () => {
     expect(far).toBeGreaterThan(1);
     expect(far).toBeLessThan(3.6);
     expect(apart).toBeGreaterThan(0.3);
+    // a breast drops and swings, and rises under half as far (free to rise as far, 6 cm on this jog, it was flattened up the chest each stride)
+    const breast = tissue.region("breastL")!;
+    let up = 0, down = 0;
+    for (let f = 0; f < 180; f++) {
+      rig.pose(M.walk.walkFrame(4 + f / 60, "jog", rig.anatomy).pose);
+      tissue.step(1 / 60);
+      up = Math.max(up, breast.dispLocal.y);
+      down = Math.max(down, -breast.dispLocal.y);
+    }
+    expect([down > 1.5 && down < 3.6, up < 0.5 * down]).toEqual([true, true]);
     // and standing still it comes to rest on the mesh
     for (let f = 0; f < 240; f++) {
       rig.pose(M.pose.PRESETS.neutral);

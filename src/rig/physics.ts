@@ -20,6 +20,7 @@
  * further it is from where the tissue is held (up to `WAVE` s at its middle), so a jolt runs
  * out through it as a wave. Moved as one piece, a buttock at full jiggle slid off the pelvis in
  * a lump with a corner at the hip; it is also held to half its sideways travel, and to 3.5 cm.
+ * A breast is held to 3.5 cm too, and rises less than half as far as it drops.
  *
  * Units: body cm, seconds. Four fixed substeps a frame keep it from blowing up at any frame
  * rate; the motion still differs a little with it (a walk's breast peak: 3.7 cm at 24 frames a
@@ -172,7 +173,7 @@ export class SoftTissue {
       const compliance = Math.min(1.65, volume * (1 - 0.16 * muscle)) * jig;
       const freq = Math.max(2.0, 3.85 - 0.95 * breast - 0.45 * fat + 0.28 * muscle);
       const zeta = Math.max(0.15, 0.33 - 0.08 * breast - 0.06 * fat + 0.08 * muscle);
-      const maxDisp = (0.75 + 2.75 * Math.min(1.5, volume)) * Math.min(1.45, Math.sqrt(Math.max(0.1, jig)));
+      const maxDisp = (0.5 + 1.3 * Math.min(1.5, volume)) * Math.min(1.45, Math.sqrt(Math.max(0.1, jig)));
       return { freq, zeta, maxDisp, maxInward: 0.75, compliance, outwardX: 1 };
     }
 
@@ -300,6 +301,9 @@ export class SoftTissue {
       this.vLocal.multiplyScalar(scale);
       // a buttock moves up and down and fore and aft; sideways it is held by the hip
       if (p.outwardX < 0) this.vLocal.z *= 0.5;
+      // a breast hangs from the chest: it drops and swings, and rises under half as far (free to go
+      // up as far as down, 6 cm each way on a jog, it was smeared flat up the chest at each stride)
+      else if (r.def.side !== 0 && this.vLocal.y > 0) this.vLocal.y = softClamp(this.vLocal.y, 0.4 * p.maxDisp);
 
       // Anatomical inward collision limit (cannot collapse deep into ribcage or pelvis)
       const outward = this.vLocal.x * p.outwardX;
