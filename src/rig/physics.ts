@@ -16,6 +16,11 @@
  * path it moved through the frame, so a body that travels (a clip that walks across the scene)
  * carries its tissue with it (damped against the world, the tissue trailed 2.5 cm at a walk).
  *
+ * A region doesn't move as a block: its skin follows the region's centre late, the later the
+ * further it is from where the tissue is held (up to `WAVE` s at its middle), so a jolt runs
+ * out through it as a wave. Moved as one piece, a buttock at full jiggle slid off the pelvis in
+ * a lump with a corner at the hip; it is also held to half its sideways travel, and to 3.5 cm.
+ *
  * Units: body cm, seconds. Four fixed substeps a frame keep it from blowing up at any frame
  * rate; the motion still differs a little with it (a walk's breast peak: 3.7 cm at 24 frames a
  * second, 3.9 at 240), and under 20 a second it runs slow (`MAX_DT`).
@@ -53,11 +58,18 @@ export interface TissueRegionState {
   compliance: number;
   /** previous thigh flexion (for gluteal heel-strike / femur push coupling) */
   prevThighX: number;
+  /** where its displacement has been lately: (time, x, y, z) in world cm, a ring `TRAIL` long, and where the ring is at */
+  readonly trail: Float32Array;
+  trailAt: number;
 }
 
 const SUBSTEPS = 4;
 const MAX_DT = 0.05;
 const TELEPORT_CM = 35;
+/** how late the middle of a region follows its centre (s), and how many steps back it can look */
+const WAVE = 0.055;
+const TRAIL = 24;
+const BANDS = 4;
 
 /** smooth C1 saturation: linear near 0, asymptotically approaches `limit` */
 const softClamp = (x: number, limit: number) => (limit > 1e-6 ? limit * Math.tanh(x / limit) : 0);
@@ -67,6 +79,10 @@ export class SoftTissue {
   readonly regions: TissueRegionState[] = [];
   private readonly byName = new Map<string, TissueRegionState>();
   private seeded = false;
+  /** the time stepped so far (s) */
+  private clock = 0;
+  /** a region's displacement at `BANDS` delays, for the frame being applied (xyz each) */
+  private readonly late = new Float32Array(3 * BANDS);
 
   // reusable scratch vectors/quaternions (no per-frame allocations)
   private readonly vAnchor = new THREE.Vector3();
@@ -104,6 +120,8 @@ export class SoftTissue {
         magnitude: 0,
         compliance: 0,
         prevThighX: 0,
+        trail: new Float32Array(4 * TRAIL),
+        trailAt: 0,
       };
       this.regions.push(state);
       this.byName.set(def.name, state);
@@ -122,6 +140,8 @@ export class SoftTissue {
       r.dispWorld.set(0, 0, 0);
       r.dispLocal.set(0, 0, 0);
       r.magnitude = 0;
+      r.trail.fill(0);
+      for (let k = 0; k < TRAIL; k++) r.trail[4 * k] = this.clock;
     }
   }
 
@@ -164,7 +184,7 @@ export class SoftTissue {
       const compliance = Math.min(1.6, volume * tone) * jig;
       const freq = Math.max(2.4, 4.35 - 0.72 * butt - 0.68 * fat + 0.52 * muscle);
       const zeta = Math.max(0.17, 0.35 - 0.06 * fat - 0.05 * butt + 0.09 * muscle);
-      const maxDisp = (0.65 + 2.2 * Math.min(1.45, volume * tone)) * Math.min(1.45, Math.sqrt(Math.max(0.1, jig)));
+      const maxDisp = (0.6 + 1.5 * Math.min(1.45, volume * tone)) * Math.min(1.45, Math.sqrt(Math.max(0.1, jig)));
       return { freq, zeta, maxDisp, maxInward: 0.65, compliance, outwardX: -1 };
     }
 
@@ -209,6 +229,7 @@ export class SoftTissue {
     }
 
     const clampedDt = Math.max(0, Math.min(MAX_DT, dt));
+    this.clock += clampedDt;
     const subDt = clampedDt / SUBSTEPS;
 
     for (const r of this.regions) {
@@ -277,6 +298,8 @@ export class SoftTissue {
       // Scale response by compliance (keeps flat male chest quiet while female/curvy/fat moves freely)
       const scale = Math.min(1.35, p.compliance);
       this.vLocal.multiplyScalar(scale);
+      // a buttock moves up and down and fore and aft; sideways it is held by the hip
+      if (p.outwardX < 0) this.vLocal.z *= 0.5;
 
       // Anatomical inward collision limit (cannot collapse deep into ribcage or pelvis)
       const outward = this.vLocal.x * p.outwardX;
@@ -295,6 +318,10 @@ export class SoftTissue {
       r.dispLocal.copy(this.vLocal);
       r.dispWorld.copy(this.vLocal).applyQuaternion(rig.S[bi]);
       r.magnitude = r.dispWorld.length();
+      if (clampedDt > 0) {
+        r.trailAt = (r.trailAt + 1) % TRAIL;
+        r.trail.set([this.clock, r.dispWorld.x, r.dispWorld.y, r.dispWorld.z], 4 * r.trailAt);
+      }
     }
 
     this.seeded = true;
@@ -311,7 +338,18 @@ export class SoftTissue {
       if (r.magnitude < 1e-4 || r.compliance < 1e-4) continue;
       const bi = r.boneIndex;
       const S = rig.S[bi];
-      const dx = r.dispWorld.x, dy = r.dispWorld.y, dz = r.dispWorld.z;
+      // where the region's centre was at each of a few delays back: the skin takes the one its place calls for
+      const late = this.late, T = r.trail;
+      for (let b = 0; b < BANDS; b++) {
+        const when = this.clock - (WAVE * b) / (BANDS - 1);
+        let k = r.trailAt, older = (k + TRAIL - 1) % TRAIL, steps = 0;
+        while (T[4 * older] > when && T[4 * older] < T[4 * k] && ++steps < TRAIL - 1) {
+          k = older;
+          older = (k + TRAIL - 1) % TRAIL;
+        }
+        const t1 = T[4 * k], t0 = T[4 * older], u = t1 > t0 && when < t1 ? Math.max(0, (when - t0) / (t1 - t0)) : 1;
+        for (let c = 0; c < 3; c++) late[3 * b + c] = T[4 * older + 1 + c] + (T[4 * k + 1 + c] - T[4 * older + 1 + c]) * u;
+      }
       const outSign = r.def.name === "buttL" || r.def.name === "buttR" ? -1 : 1;
       // Inward compression drives subtle radial bulge (Poisson-like volume preservation)
       const compress = Math.max(0, -(r.dispLocal.x * outSign));
@@ -323,9 +361,11 @@ export class SoftTissue {
       for (let k = 0; k < r.verts.length; k++) {
         const { idx, sw } = r.verts[k];
         const o = 3 * idx;
-        let ox = sw * dx;
-        let oy = sw * dy;
-        let oz = sw * dz;
+        // the more a vertex is of the region, the later it follows
+        const at = sw * (BANDS - 1), b = Math.min(BANDS - 2, Math.floor(at)), f = at - b;
+        let ox = sw * (late[3 * b] + (late[3 * b + 3] - late[3 * b]) * f);
+        let oy = sw * (late[3 * b + 1] + (late[3 * b + 4] - late[3 * b + 1]) * f);
+        let oz = sw * (late[3 * b + 2] + (late[3 * b + 5] - late[3 * b + 2]) * f);
         if (bulge > 1e-4 || Math.abs(pend) > 1e-4) {
           this.vRel.set(skinned[o] - cx, skinned[o + 1] - cy, skinned[o + 2] - cz);
           this.qInv.copy(S).invert();

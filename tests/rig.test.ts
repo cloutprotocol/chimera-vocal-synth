@@ -985,4 +985,40 @@ describe("the shaped body and the rest of the rig", () => {
     full.setAnatomy({ butt: 0, waist: 0 });
     expect(maxMove(plain.rest, full.rest, Array(plain.bodyVertices).keys())).toBeLessThan(1e-4);
   });
+
+  test("a jolt runs through the soft tissue as a wave, and a buttock stays on the pelvis (moved as one piece, at full jiggle it slid off in a lump, 5 cm, with a corner at the hip)", () => {
+    const rig = loadRig();
+    rig.setAnatomy({ female: 1, fat: 0.05, muscle: 0.35, breast: 0.85, butt: 1, waist: 1 });
+    const tissue = new M.physics.SoftTissue(rig);
+    tissue.settings.jiggle = 2;
+    const butt = tissue.region("buttL")!, P = new Float32Array(3 * rig.n), Q = new Float32Array(3 * rig.n);
+    // the vertex most of the region, and one at its edge
+    const mid = butt.verts.reduce((a, v) => (v.sw > a.sw ? v : a)), edge = butt.verts.reduce((a, v) => (Math.abs(v.sw - 0.15) < Math.abs(a.sw - 0.15) ? v : a));
+    let far = 0, apart = 0;
+    for (let f = 0; f < 240; f++) {
+      rig.pose(M.walk.walkFrame(f / 60, "jog", rig.anatomy).pose);
+      tissue.step(1 / 60);
+      rig.skin(P);
+      Q.set(P);
+      tissue.apply(Q);
+      if (f < 60) continue;
+      const moved = (v: { idx: number; sw: number }) => at(Q, v.idx).sub(at(P, v.idx));
+      far = Math.max(far, moved(mid).length());
+      // as one piece, every vertex moves the way the centre does, by its weight: the middle is now late on that
+      apart = Math.max(apart, moved(mid).sub(butt.dispWorld.clone().multiplyScalar(mid.sw)).length());
+      expect(moved(edge).length()).toBeLessThan(1.5);
+    }
+    expect(far).toBeGreaterThan(1);
+    expect(far).toBeLessThan(3.6);
+    expect(apart).toBeGreaterThan(0.3);
+    // and standing still it comes to rest on the mesh
+    for (let f = 0; f < 240; f++) {
+      rig.pose(M.pose.PRESETS.neutral);
+      tissue.step(1 / 60);
+    }
+    rig.skin(P);
+    Q.set(P);
+    tissue.apply(Q);
+    expect(maxMove(P, Q, Array(rig.bodyVertices).keys())).toBeLessThan(0.01);
+  });
 });
