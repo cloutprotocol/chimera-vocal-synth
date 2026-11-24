@@ -100,7 +100,9 @@ is fitted to the model once.
   MakeHuman's buttocks volume target, split at the midline with ipsilateral thigh coupling) and
   abdominal adipose (`belly`). Integrates in world space (4 symplectic substeps/frame) with
   anatomical inward collision clamping and volume-preserving squash-and-stretch. Standing still,
-  a region stays where the mesh has it: the shapes were drawn hanging under gravity already.
+  a region stays where the mesh has it: the shapes were drawn hanging under gravity already. The
+  springs are damped against the body, so one that travels through a scene carries its tissue
+  with it.
 - **Muscle system (`src/rig/muscles.ts`):** 30 superficial anatomical muscles (15 bilateral pairs)
   anchored across the skeleton. Contraction combines kinematic shortening strain with optional
   weight-bearing gait loads (`MuscleLoads`), twitch-filtered (~45 ms attack / ~130 ms decay) to

@@ -799,4 +799,82 @@ describe("the shaped body and the rest of the rig", () => {
       expect([name, jointsApart(src, dst, true).cm < 0.1, handsApart(src, dst) < 0.5]).toEqual([name, true, true]);
     });
   });
+
+  test("a body that travels carries its soft tissue with it (damped against the world, not the body, the buttocks trailed 2.5 cm at a walk's pace and the breasts sat on their stops)", () => {
+    const rig = loadRig();
+    rig.setAnatomy(SHAPES["female, heavy"]);
+    const tissue = new M.physics.SoftTissue(rig), part = new M.maleAnatomy.MaleAnatomy(rig);
+    tissue.settings.jiggle = 2;
+    part.size = M.maleAnatomy.PENIS_SIZES.M;
+    const run = (speed: number) => {
+      tissue.reset();
+      part.reset();
+      for (let f = 0; f < 180; f++) {
+        rig.pose(M.pose.pose({ body: { x: (speed * f) / 60 } }));
+        tissue.step(1 / 60);
+        part.update(1 / 60);
+      }
+      return part.magnitude;
+    };
+    const still = run(0), going = run(138);
+    for (const r of tissue.regions) expect([r.def.name, r.magnitude < 0.01]).toEqual([r.def.name, true]);
+    expect(Math.abs(going - still)).toBeLessThan(0.01);
+    part.dispose();
+  });
+
+  test("the male part is rooted under the skin of every body, and swings the same whichever way the body faces (placed from two sliders it stood up to 2.5 cm proud; its swing read the world's x)", () => {
+    /** how far the skin is ahead of a point, along the body's forward: over 0 if the point is inside */
+    const under = (rig: RigT, P: Float32Array, at: THREE.Vector3): number => {
+      // a little off the midline, where the ray would run along the mesh's own edges
+      const py = at.y + 0.113, pz = at.z + 0.371;
+      let ahead = Infinity, hits = 0;
+      for (let f = 0; f < rig.nq; f++) {
+        const q = [0, 1, 2, 3].map((j) => rig.quads[4 * f + j]);
+        if (q.some((v) => v >= rig.bodyVertices)) continue;
+        for (const [a, b, c] of [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]) {
+          const ay = P[3 * a + 1] - py, az = P[3 * a + 2] - pz, by = P[3 * b + 1] - py, bz = P[3 * b + 2] - pz, cy = P[3 * c + 1] - py, cz = P[3 * c + 2] - pz;
+          const w0 = by * cz - bz * cy, w1 = cy * az - cz * ay, w2 = ay * bz - az * by, sum = w0 + w1 + w2;
+          if (!sum || !((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0))) continue;
+          const x = (w0 * P[3 * a] + w1 * P[3 * b] + w2 * P[3 * c]) / sum - at.x;
+          if (x > 0) {
+            hits++;
+            ahead = Math.min(ahead, x);
+          }
+        }
+      }
+      return hits % 2 ? ahead : -1;
+    };
+    for (const [name, shape] of Object.entries(SHAPES)) {
+      const rig = loadRig();
+      rig.setAnatomy(shape);
+      const part = new M.maleAnatomy.MaleAnatomy(rig), P = new Float32Array(3 * rig.n);
+      part.size = M.maleAnatomy.PENIS_SIZES.M;
+      for (let f = 0; f <= 24; f++) {
+        rig.pose(f ? M.walk.walkFrame(f / 24, "walk", rig.anatomy).pose : M.pose.PRESETS.neutral);
+        part.update(1 / 60);
+        rig.skin(P);
+        const d = under(rig, P, part.root);
+        expect([name, f, d > 0.4 && d < 2.5]).toEqual([name, f, true]);
+      }
+      part.dispose();
+    }
+    const rig = loadRig(), part = new M.maleAnatomy.MaleAnatomy(rig);
+    part.size = M.maleAnatomy.PENIS_SIZES.L;
+    const swing = (turn: number) => {
+      part.reset();
+      let sum = 0;
+      for (let f = 0; f < 120; f++) {
+        const p = M.walk.walkFrame(f / 60, "walk", rig.anatomy).pose;
+        p.body.turn += turn;
+        rig.pose(p);
+        part.update(1 / 60);
+        if (f >= 60) sum += part.magnitude;
+      }
+      return sum / 60;
+    };
+    const ahead = swing(0);
+    expect(ahead).toBeGreaterThan(0.5);
+    for (const turn of [90, 180]) expect(Math.abs(swing(turn) - ahead)).toBeLessThan(0.05);
+    part.dispose();
+  });
 });

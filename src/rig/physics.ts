@@ -12,8 +12,13 @@
  * gravity already, so the spring adds no sag of its own (it once did, 1.6 cm on a full breast,
  * and the whole breast slid down the chest into a ledge).
  *
- * Units: body cm, seconds. Stable under variable frame rates via 4 fixed symplectic substeps per
- * frame.
+ * A region's spring is damped against the body it hangs on, and its target is taken along the
+ * path it moved through the frame, so a body that travels (a clip that walks across the scene)
+ * carries its tissue with it (damped against the world, the tissue trailed 2.5 cm at a walk).
+ *
+ * Units: body cm, seconds. Four fixed substeps a frame keep it from blowing up at any frame
+ * rate; the motion still differs a little with it (a walk's breast peak: 3.7 cm at 24 frames a
+ * second, 3.9 at 240), and under 20 a second it runs slow (`MAX_DT`).
  */
 import * as THREE from "three";
 import type { Rig, TissueDef } from "./rig.ts";
@@ -29,12 +34,13 @@ export const SOFT_TISSUE_SETTINGS: Readonly<SoftTissueSettings> = { enabled: tru
 export interface TissueRegionState {
   readonly def: TissueDef;
   readonly boneIndex: number;
-  /** sparse influenced body vertices: [vertexIndex, weight, smoothWeight, relX, relY, relZ] */
+  /** the body vertices it moves: each one's index, weight and smoothed weight */
   readonly verts: { idx: number; w: number; sw: number }[];
   /** current oscillator centre in world cm */
   readonly pos: THREE.Vector3;
-  /** rigid parent-bone target centre in world cm */
+  /** rigid parent-bone target centre in world cm, and where it was at the last step */
   readonly target: THREE.Vector3;
+  readonly prevTarget: THREE.Vector3;
   /** current velocity in world cm/s */
   readonly vel: THREE.Vector3;
   /** clamped displacement (world cm) applied to vertices this frame */
@@ -67,6 +73,8 @@ export class SoftTissue {
   private readonly vDelta = new THREE.Vector3();
   private readonly vLocal = new THREE.Vector3();
   private readonly vAcc = new THREE.Vector3();
+  private readonly vGoes = new THREE.Vector3();
+  private readonly vTo = new THREE.Vector3();
   private readonly vRel = new THREE.Vector3();
   private readonly vOut = new THREE.Vector3();
   private readonly qInv = new THREE.Quaternion();
@@ -89,6 +97,7 @@ export class SoftTissue {
         verts,
         pos: new THREE.Vector3(),
         target: new THREE.Vector3(),
+        prevTarget: new THREE.Vector3(),
         vel: new THREE.Vector3(),
         dispWorld: new THREE.Vector3(),
         dispLocal: new THREE.Vector3(),
@@ -218,6 +227,7 @@ export class SoftTissue {
       // Seed cleanly on first frame or after a teleport (pose switch)
       if (!this.seeded || r.pos.distanceTo(r.target) > TELEPORT_CM) {
         r.pos.copy(r.target);
+        r.prevTarget.copy(r.target);
         r.vel.set(0, 0, 0);
         if (r.def.name === "buttL" || r.def.name === "buttR") {
           const th = rig.bone(r.def.side < 0 ? "thigh.L" : "thigh.R");
@@ -239,9 +249,12 @@ export class SoftTissue {
 
       // Integrate 4 symplectic substeps (unconditionally stable for omega * subDt < 2)
       if (subDt > 0 && p.compliance > 1e-4) {
+        // how fast the target goes: the damping is on the tissue's speed against it
+        this.vGoes.copy(r.target).sub(r.prevTarget).divideScalar(clampedDt);
         for (let s = 0; s < SUBSTEPS; s++) {
-          this.vAcc.copy(r.target).sub(r.pos).multiplyScalar(kSpring);
-          this.vAcc.addScaledVector(r.vel, -cDamp);
+          this.vTo.copy(r.prevTarget).lerp(r.target, s / SUBSTEPS);
+          this.vAcc.copy(this.vTo).sub(r.pos).multiplyScalar(kSpring);
+          this.vAcc.addScaledVector(r.vel, -cDamp).addScaledVector(this.vGoes, cDamp);
           if (gluteKick) {
             this.vAcc.y += 0.35 * Math.abs(gluteKick);
             this.vAcc.x -= 0.25 * gluteKick;
@@ -253,6 +266,8 @@ export class SoftTissue {
         r.pos.copy(r.target);
         r.vel.set(0, 0, 0);
       }
+
+      r.prevTarget.copy(r.target);
 
       // Convert raw world displacement (pos - target) into parent-bone local frame for anatomical constraints
       this.vDelta.copy(r.pos).sub(r.target);

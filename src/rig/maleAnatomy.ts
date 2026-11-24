@@ -1,8 +1,8 @@
 /**
  * Male external pelvic anatomy (penis shaft, coronal glans & scrotum) rendered in CHIMERA's
  * phosphor-blue quad wireframe style (`WIRE_VERT` / `WIRE_FRAG`), anchored to the `hips` bone
- * at the pubic symphysis with continuous size scaling (`0`: hidden, `0.45`: S, `0.75`: M,
- * `1.1`: L, `1.45`: XL) and damped pendulum soft-tissue jiggle physics.
+ * at the pubic symphysis with continuous size scaling (`0`: hidden; `PENIS_SIZES` names S to XL)
+ * and damped pendulum soft-tissue jiggle physics.
  */
 import * as THREE from "three";
 import type { Rig } from "./rig.ts";
@@ -63,6 +63,9 @@ export class MaleAnatomy {
   // Pendulum oscillator state (world-space tip mass relative to pubic anchor)
   private readonly anchorWorld = new THREE.Vector3();
   private readonly tipTarget = new THREE.Vector3();
+  private readonly tipWas = new THREE.Vector3();
+  private readonly anchorRest = new THREE.Vector3();
+  private anchorFor = "";
   private readonly tipPos = new THREE.Vector3();
   private readonly tipVel = new THREE.Vector3();
   private readonly dispLocal = new THREE.Vector3();
@@ -71,6 +74,8 @@ export class MaleAnatomy {
   // Reusable scratch objects
   private readonly vAnchor = new THREE.Vector3();
   private readonly vAcc = new THREE.Vector3();
+  private readonly vGoes = new THREE.Vector3();
+  private readonly vTo = new THREE.Vector3();
   private readonly vDelta = new THREE.Vector3();
   private readonly qInv = new THREE.Quaternion();
   private readonly vDir = new THREE.Vector3();
@@ -79,7 +84,7 @@ export class MaleAnatomy {
   private readonly vPt = new THREE.Vector3();
 
   constructor(readonly rig: Rig) {
-    // Vertices: shaft (LEN_SEGS + 1) * RAD_SEGS + tip pole + scrotum (SCROTUM_V + 1) * SCROTUM_U
+    // Vertices: shaft (LEN_SEGS + 1) * RAD_SEGS (its last ring closes to a point) + scrotum (SCROTUM_V + 1) * SCROTUM_U
     const shaftVerts = (LEN_SEGS + 1) * RAD_SEGS;
     const scrotumOff = shaftVerts;
     const scrotumVerts = (SCROTUM_V + 1) * SCROTUM_U;
@@ -170,13 +175,37 @@ export class MaleAnatomy {
     this.magnitude = 0;
   }
 
-  /** pubic symphysis rest anchor (body cm), adapting cleanly to male/female pelvis + fat */
+  /** where it is rooted on the body this frame (world cm) */
+  get root(): THREE.Vector3 {
+    return this.anchorWorld;
+  }
+
+  /**
+   * Where it roots at rest (body cm): on the midline 3.5 cm over the hips' joint, 1 cm under the
+   * skin there as the anatomy has shaped it: the skin's place read off the midline's own vertices
+   * either side of that height (the mound slopes, and a vertex a centimetre higher is further
+   * forward). Worked out from `female` and `fat` alone, the root stood 1 to 2.5 cm proud of a
+   * muscular body or a female one, its open ring in the air.
+   */
   private restAnchor(out: THREE.Vector3): THREE.Vector3 {
-    const { female, fat } = this.rig.anatomy;
-    // Male pubic root: [10.1, 5.1, 0]; Female pubic root shifts down ~9.5 cm with pelvis
-    const x = 10.1 + 0.5 * female + 1.1 * fat;
-    const y = 5.1 - 9.6 * female;
-    return out.set(x, y, 0);
+    const rig = this.rig, a = rig.anatomy, key = `${a.female},${a.fat},${a.muscle},${a.breast},${a.butt}`;
+    if (key !== this.anchorFor) {
+      const R = rig.rest, hip = rig.bones[rig.bone("hips")].head, y = hip[1] + 3.5;
+      // the front of the midline: its nearest vertex under that height and the nearest over it
+      let under = -1, over = -1;
+      for (let i = 0; i < rig.bodyVertices; i++) {
+        if (Math.abs(R[3 * i + 2]) > 0.75 || R[3 * i] <= hip[0]) continue;
+        const h = R[3 * i + 1];
+        if (h <= y && (under < 0 || h > R[3 * under + 1])) under = i;
+        if (h > y && (over < 0 || h < R[3 * over + 1])) over = i;
+      }
+      let skin = hip[0] + 10;
+      if (under >= 0 && over >= 0) skin = R[3 * under] + ((R[3 * over] - R[3 * under]) * (y - R[3 * under + 1])) / (R[3 * over + 1] - R[3 * under + 1]);
+      else if (under >= 0 || over >= 0) skin = R[3 * Math.max(under, over)];
+      this.anchorRest.set(skin - 1, y, 0);
+      this.anchorFor = key;
+    }
+    return out.copy(this.anchorRest);
   }
 
   /** advance pendulum soft-tissue physics and rebuild quad mesh for the current frame */
@@ -194,7 +223,7 @@ export class MaleAnatomy {
     const hipsIdx = rig.bone("hips");
     const S = rig.S[hipsIdx], P = rig.P[hipsIdx], H = rig.H[hipsIdx];
 
-    // Anatomical dimensions (cm) scaled smoothly by size s in [0.2..1.5]
+    // Anatomical dimensions (cm) scaled smoothly by size s in [0..1.6]
     const scaleL = 0.55 + 0.72 * s;
     const scaleR = 0.65 + 0.52 * s;
     const length = 11.2 * scaleL;
@@ -214,6 +243,7 @@ export class MaleAnatomy {
 
     if (!this.seeded || this.tipPos.distanceTo(this.tipTarget) > 35 || jig <= 1e-4) {
       this.tipPos.copy(this.tipTarget);
+      this.tipWas.copy(this.tipTarget);
       this.tipVel.set(0, 0, 0);
       this.seeded = true;
     } else if (clampedDt > 0) {
@@ -224,14 +254,20 @@ export class MaleAnatomy {
       const zeta = 0.24;
       const cDamp = 2 * zeta * omega;
       const subDt = clampedDt / SUBSTEPS;
+      // damped against the body it hangs on, its target taken along its path through the frame
+      // (as physics.ts: damped against the world it trailed a body that travels)
+      this.vGoes.copy(this.tipTarget).sub(this.tipWas).divideScalar(clampedDt);
       for (let i = 0; i < SUBSTEPS; i++) {
-        this.vAcc.copy(this.tipTarget).sub(this.tipPos).multiplyScalar(kSpring);
-        this.vAcc.addScaledVector(this.tipVel, -cDamp);
+        this.vTo.copy(this.tipWas).lerp(this.tipTarget, i / SUBSTEPS);
+        this.vAcc.copy(this.vTo).sub(this.tipPos).multiplyScalar(kSpring);
+        this.vAcc.addScaledVector(this.tipVel, -cDamp).addScaledVector(this.vGoes, cDamp);
         this.vAcc.y -= this.gravity * 0.08 * scaleL;
         this.tipVel.addScaledVector(this.vAcc, subDt);
         this.tipPos.addScaledVector(this.tipVel, subDt);
       }
     }
+
+    this.tipWas.copy(this.tipTarget);
 
     // Local displacement relative to hips frame, with thigh/pelvis collision bounds
     this.vDelta.copy(this.tipPos).sub(this.tipTarget);
@@ -239,8 +275,10 @@ export class MaleAnatomy {
     this.dispLocal.copy(this.vDelta).applyQuaternion(this.qInv).multiplyScalar(Math.min(1.4, jig));
 
     // Gentle thigh-swing clearance during walking: thighs push tip slightly forward & sideways
-    const thL = rig.P[rig.bone("shin.L")].x - rig.P[rig.bone("thigh.L")].x;
-    const thR = rig.P[rig.bone("shin.R")].x - rig.P[rig.bone("thigh.R")].x;
+    // how far forward each knee is of its hip, in the hips' frame (read off the world's x, the
+    // push was there only for a body facing +x)
+    const fwd = (side: string) => this.vPt.copy(rig.P[rig.bone(`shin.${side}`)]).sub(rig.P[rig.bone(`thigh.${side}`)]).applyQuaternion(this.qInv).x;
+    const thL = fwd("L"), thR = fwd("R");
     const thighPush = Math.max(0, Math.max(thL, thR) - 4) * 0.08 * scaleL;
     this.dispLocal.x = Math.max(-1.0 * scaleL, this.dispLocal.x + thighPush);
     const maxDisp = 3.2 * scaleL * Math.min(1.3, Math.sqrt(Math.max(0.1, jig)));
