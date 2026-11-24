@@ -987,6 +987,34 @@ describe("the shaped body and the rest of the rig", () => {
     expect(maxMove(plain.rest, full.rest, Array(plain.bodyVertices).keys())).toBeLessThan(1e-4);
   });
 
+  test("the breasts sit near the chest's middle and stay round to the slider's end (as MakeHuman drew them they sat 8.3 cm off it; carried on in a straight line past the cup as drawn, the front went flat, 9.6 cm tall)", () => {
+    const shaped = (breast: number) => {
+      const rig = loadRig();
+      rig.setAnatomy({ female: 1, fat: 0.05, muscle: 0.35, breast, butt: 1.1, waist: 1 });
+      return rig.rest;
+    };
+    const none = shaped(0), n = loadRig().bodyVertices;
+    for (const breast of [0.9, 1.4]) {
+      const R = shaped(breast);
+      // one breast: the skin on one side that the slider moved
+      const own = [...Array(n).keys()].filter((i) => R[3 * i + 2] > 0 && Math.hypot(R[3 * i] - none[3 * i], R[3 * i + 1] - none[3 * i + 1], R[3 * i + 2] - none[3 * i + 2]) > 0.3);
+      // where its bulk is from the chest's middle: each vertex by how far forward it came
+      let side = 0, sum = 0;
+      for (const i of own) {
+        const out = Math.max(0, R[3 * i] - none[3 * i]);
+        side += out * R[3 * i + 2];
+        sum += out;
+      }
+      expect(side / sum).toBeGreaterThan(6.2);
+      expect(side / sum).toBeLessThan(7.8);
+      // its front: the vertices within 1 cm of the foremost. Round, they are a small patch
+      const fore = Math.max(...own.map((i) => R[3 * i])), ys = own.filter((i) => R[3 * i] > fore - 1).map((i) => R[3 * i + 1]);
+      expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(5);
+      // and neither crosses the middle
+      expect(Math.min(...own.map((i) => R[3 * i + 2]))).toBeGreaterThanOrEqual(0);
+    }
+  });
+
   test("a jolt runs through the soft tissue as a wave, a buttock stays on the pelvis and a breast isn't thrown up the chest (moved as one piece, at full jiggle a buttock slid off in a lump, 5 cm, with a corner at the hip)", () => {
     const rig = loadRig();
     rig.setAnatomy({ female: 1, fat: 0.05, muscle: 0.35, breast: 0.85, butt: 1, waist: 1 });

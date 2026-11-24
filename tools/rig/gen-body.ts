@@ -126,7 +126,7 @@ for (const race of ["african", "asian", "caucasian"]) await addTarget(mhFemale, 
 // Morph target base meshes (in MakeHuman dm):
 // - fat: subcutaneous adipose fullness (universal maxweight + regional fat pads)
 // - muscle: athletic muscularity (universal maxmuscle + major superficial muscle groups)
-// - breast: bust cup volume (female maxcup - averagecup)
+// - breast: bust cup volume (female maxcup, brought together and rounded at the slider's end)
 // - butt: gluteal volume (buttocks-volume-incr)
 // - waist: the waist drawn in
 const mhFat = mh.map((p) => [...p] as V3);
@@ -158,10 +158,66 @@ await addTarget(mhMuscle, "targets/armslegs/r-lowerleg-muscle-incr.target", 0.6)
 await addTarget(mhMuscle, "targets/stomach/stomach-tone-incr.target", 0.6);
 
 const mhBreast = mhFemale.map((p) => [...p] as V3);
-// the largest cup MakeHuman's artists drew, between its average and its firm shape: the two weights
-// sum to 1, as its own sliders mix them (past 1 the shape is extrapolated and stops being a breast)
-await addTarget(mhBreast, "targets/breast/female-young-averagemuscle-averageweight-maxcup-averagefirmness.target", 0.55);
-await addTarget(mhBreast, "targets/breast/female-young-averagemuscle-averageweight-maxcup-maxfirmness.target", 0.45);
+// the largest cup MakeHuman's artists drew, nearer its firm shape than its average (the two weights
+// sum to 1, as its own sliders mix them), and the two brought three quarters of the way together
+// by its own target. (Mostly the average shape and as far apart as drawn, they sat wide of the
+// chest's middle with a flat valley between, and hung outward as they grew.)
+await addTarget(mhBreast, "targets/breast/female-young-averagemuscle-averageweight-maxcup-averagefirmness.target", 0.3);
+await addTarget(mhBreast, "targets/breast/female-young-averagemuscle-averageweight-maxcup-maxfirmness.target", 0.7);
+await addTarget(mhBreast, "targets/breast/breast-dist-decr.target", 0.75);
+{
+  // The slider runs past the cup as drawn, to BREAST_FULL, and a shape carried on in a straight
+  // line goes square: a flat front with a corner above and below it. So the shape at the slider's
+  // end is relaxed (each vertex towards the middle of its neighbours, by how much of the breast
+  // it is), grown back from its root on the chest to the reach it had, and the morph is that
+  // shape's share: round at the end and round on the way there.
+  const BREAST_FULL = 1.4, ROUNDS = 18;
+  const part = (x: number) => {
+    const t = Math.max(0, Math.min(1, x));
+    return t * t * (3 - 2 * t);
+  };
+  const beside: number[][] = base.map(() => []);
+  for (const q of baseQuads) for (let k = 0; k < q.length; k++) beside[q[k]].push(q[(k + 1) % q.length], q[(k + q.length - 1) % q.length]);
+  const movedBy = (i: number) => Math.hypot(mhBreast[i][0] - mhFemale[i][0], mhBreast[i][1] - mhFemale[i][1], mhBreast[i][2] - mhFemale[i][2]);
+  for (const side of [-1, 1]) {
+    const own: number[] = [], w = new Float64Array(base.length);
+    let most = 0;
+    for (let i = 0; i < base.length; i++) {
+      if (!beside[i].length || movedBy(i) < 1e-5 || side * mhFemale[i][0] <= 0) continue;
+      own.push(i);
+      most = Math.max(most, movedBy(i));
+    }
+    for (const i of own) w[i] = part((movedBy(i) / most - 0.08) / 0.45);
+    const P = base.map((_, i) => [0, 1, 2].map((k) => mhFemale[i][k] + BREAST_FULL * (mhBreast[i][k] - mhFemale[i][k])) as V3);
+    const root: V3 = [0, 0, 0];
+    let sum = 0;
+    for (const i of own) {
+      for (let k = 0; k < 3; k++) root[k] += w[i] * mhFemale[i][k];
+      sum += w[i];
+    }
+    for (let k = 0; k < 3; k++) root[k] /= sum;
+    const reach = () => own.reduce((a, i) => Math.max(a, w[i] * Math.hypot(P[i][0] - root[0], P[i][1] - root[1], P[i][2] - root[2])), 0);
+    const before = reach();
+    for (let round = 0; round < ROUNDS; round++) {
+      const mid = own.map((i) => {
+        const m: V3 = [0, 0, 0];
+        for (const j of beside[i]) for (let k = 0; k < 3; k++) m[k] += P[j][k] / beside[i].length;
+        return m;
+      });
+      own.forEach((i, a) => {
+        for (let k = 0; k < 3; k++) P[i][k] += 0.5 * w[i] * (mid[a][k] - P[i][k]);
+      });
+    }
+    const grow = before / reach();
+    for (const i of own) {
+      for (let k = 0; k < 3; k++) P[i][k] += w[i] * (grow - 1) * (P[i][k] - root[k]);
+      // each stays on its own side of the chest's middle, 2 mm off it: at the slider's end they meet there
+      if (side * P[i][0] < 0.02) P[i][0] = side * 0.02;
+      for (let k = 0; k < 3; k++) mhBreast[i][k] = mhFemale[i][k] + (P[i][k] - mhFemale[i][k]) / BREAST_FULL;
+    }
+    console.log(`breast ${side < 0 ? "R" : "L"}: ${own.length} vertices relaxed ${ROUNDS} times at ${BREAST_FULL}, grown back by ${grow.toFixed(3)}`);
+  }
+}
 
 // MakeHuman's buttocks volume, a third past its full weight (its full weight is slight), and some
 // of its wider hip where the buttocks are, so the hip runs into them. (With the hips made deeper
