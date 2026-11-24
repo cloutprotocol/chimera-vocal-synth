@@ -18,8 +18,13 @@ attribute vec2 q;
 attribute float heat;
 attribute vec3 tint;
 attribute float tone;
+// a quad's finer lines, where it has them: its place in a square of its own, and how bright they are (0: none)
+attribute vec2 q2;
+attribute float fine;
 varying float vTone;
 varying vec2 vQ;
+varying vec2 vQ2;
+varying float vFine;
 varying vec3 vN;
 varying vec3 vV;
 varying float vHeat;
@@ -29,6 +34,8 @@ void main() {
   vN = normalMatrix * normal;
   vV = -mv.xyz;
   vQ = q;
+  vQ2 = q2;
+  vFine = fine;
   vHeat = heat;
   vTint = tint;
   vTone = tone;
@@ -43,11 +50,19 @@ uniform float uMode;
 uniform float uBack;
 uniform float uAlpha;
 varying vec2 vQ;
+varying vec2 vQ2;
+varying float vFine;
 varying vec3 vN;
 varying vec3 vV;
 varying float vHeat;
 varying vec3 vTint;
 varying float vTone;
+// a line along the edges of the square q runs over, fading where the squares get too small on screen to tell apart
+float wireOf(vec2 q) {
+  vec2 fw = max(fwidth(q), vec2(1e-6));
+  vec2 dq = min(q, 1.0 - q) / fw;
+  return (1.0 - smoothstep(0.35, 1.15, min(dq.x, dq.y))) * (1.0 - smoothstep(0.16, 0.42, max(fw.x, fw.y)));
+}
 vec3 heatColour(float h) {
   // calm to sore: the look's own line colour, then amber, red, white-hot
   vec3 c = mix(uLine * 0.55, vec3(1.0, 0.62, 0.1), smoothstep(0.35, 0.8, h));
@@ -58,9 +73,7 @@ void main() {
   vec3 n = normalize(vN), v = normalize(vV);
   float facing = abs(dot(n, v));
   float rim = pow(1.0 - facing, 2.5);
-  vec2 fw = max(fwidth(vQ), vec2(1e-6));
-  vec2 dq = min(vQ, 1.0 - vQ) / fw;
-  float wire = (1.0 - smoothstep(0.35, 1.15, min(dq.x, dq.y))) * (1.0 - smoothstep(0.16, 0.42, max(fw.x, fw.y)));
+  float wire = max(wireOf(vQ), vFine * wireOf(vQ2));
   vec3 line = uLine, edge = uEdge, fill = uFill;
   if (uMode > 0.5 && uMode < 1.5) {
     line = heatColour(vHeat);
@@ -342,18 +355,20 @@ export class RigView {
   private subdivLevel: 0 | 1 | 2 = 0;
   /** the mesh moved out so its subdivision passes through it (xyz) */
   private cage: Float32Array | null = null;
-  /** which of the mesh's quads are drawn at the second level's fineness, and how many */
-  private fine: Uint8Array | null = null;
-  private fineCount = -1;
+  /** how far each of the mesh's vertices is into the finer lines (0 to 1), what they were last laid out for, and how many quads' worth they come to */
+  private fine: Float32Array | null = null;
+  private fineFor = NaN;
+  private fineCount = 0;
   /**
-   * At level 2, a quad of the mesh this many cm across or more (at rest, as the anatomy has
-   * shaped it) has its lines drawn sixteen to the quad; the rest keep four, though the surface
+   * At level 2, where the mesh's quads are this many cm across or more (at rest, as the anatomy
+   * has shaped it) the lines are drawn sixteen to the quad; elsewhere four, though the surface
    * under them is as fine. So the lines stay about as far apart all over the body, and a shape
    * that grows (a breast is ten quads of the mesh, 4 cm across and more) gets the lines it needs.
-   * A quad's size is taken with its neighbours' (the mean round each of its corners, twice over),
-   * so the fine lines come in whole regions and not quad by quad, a patchwork.
+   * The finer lines come in by degrees, over a centimetre of quad size either side of this and
+   * with a quad's size taken with its neighbours': switched on quad by quad they made a
+   * patchwork, and by region a band across the thigh where the fine met the coarse.
    */
-  fineOver = 3.4;
+  fineOver = 3.2;
   private size: Float32Array | null = null;
   private around: Float32Array | null = null;
   private lastWeightBone = -1;
@@ -446,9 +461,21 @@ export class RigView {
       this.cage = new Float32Array(3 * this.rig.n);
     }
     if (level === 2 && !this.sub2) {
-      this.sub2 = buildSubdiv(this.sub!.nSub, this.sub!.nqSub, this.sub!.quads);
-      this.fine = new Uint8Array(this.rig.nq);
-      this.fineCount = -1;
+      const s2 = (this.sub2 = buildSubdiv(this.sub!.nSub, this.sub!.nqSub, this.sub!.quads)), N = s2.corner.length;
+      this.fine = new Float32Array(this.rig.n);
+      this.fineFor = NaN;
+      // each of a quad's sixteen has its place in its parent's square (the lines every body has) and a square of its own (the finer ones)
+      const q = s2.geo.getAttribute("q") as THREE.BufferAttribute, A = q.array as Float32Array, q2 = new Float32Array(2 * N);
+      const AT = [[0, 0], [1, 0], [1, 1], [0, 1]], TRI = [0, 1, 2, 0, 2, 3];
+      for (let g = 0; g < s2.nqSub; g++) {
+        for (let k = 0; k < 6; k++) {
+          A.set(IN_PARENT[g & 3][TRI[k]], 2 * (6 * g + k));
+          q2.set(AT[TRI[k]], 2 * (6 * g + k));
+        }
+      }
+      q.needsUpdate = true;
+      s2.geo.setAttribute("q2", new THREE.BufferAttribute(q2, 2));
+      s2.geo.setAttribute("fine", new THREE.BufferAttribute(new Float32Array(N), 1));
     }
     if (made) {
       this.toneChanged();
@@ -462,60 +489,52 @@ export class RigView {
   }
   /** how many quads the lines draw (four to each of the mesh's when subdivided, sixteen where it is drawn fine) */
   get quadCount(): number {
-    return this.subdivLevel === 0 || !this.sub ? this.rig.nq : 4 * this.rig.nq + (this.subdivLevel === 2 ? 12 * Math.max(0, this.fineCount) : 0);
+    return this.subdivLevel === 0 || !this.sub ? this.rig.nq : Math.round(4 * this.rig.nq + (this.subdivLevel === 2 ? 12 * this.fineCount : 0));
   }
 
-  /** at level 2: which of the mesh's quads are big enough to draw fine, and the lines laid out for it when that has changed */
+  /** at level 2: how far into the finer lines each part of the mesh is, by its quads' size, laid out again when the rest shape has changed */
   private layFine(): void {
-    const rig = this.rig, s2 = this.sub2!, fine = this.fine!, R = rig.rest, Q = rig.quads;
+    const rig = this.rig, s1 = this.sub!, s2 = this.sub2!, fine = this.fine!, R = rig.rest, Q = rig.quads;
     const far = (a: number, b: number) => Math.hypot(R[3 * a] - R[3 * b], R[3 * a + 1] - R[3 * b + 1], R[3 * a + 2] - R[3 * b + 2]);
-    // each quad's size, then each corner's (the mean of the quads round it), then each quad's again from its corners'
+    // each quad's size, then each vertex's (the mean of the quads round it), spread once more through the quads
     const size = (this.size ??= new Float32Array(rig.nq)), around = (this.around ??= new Float32Array(2 * rig.n));
-    around.fill(0);
+    let total = 0;
     for (let f = 0; f < rig.nq; f++) {
       const a = Q[4 * f], b = Q[4 * f + 1], c = Q[4 * f + 2], d = Q[4 * f + 3];
-      size[f] = (far(a, b) + far(b, c) + far(c, d) + far(d, a)) / 4;
-      for (const v of [a, b, c, d]) {
-        around[2 * v] += size[f];
-        around[2 * v + 1]++;
-      }
+      total += size[f] = (far(a, b) + far(b, c) + far(c, d) + far(d, a)) / 4;
     }
-    const spread = () => {
+    if (total === this.fineFor) return;
+    this.fineFor = total;
+    const gather = () => {
+      around.fill(0);
       for (let f = 0; f < rig.nq; f++) {
-        let sum = 0;
-        for (let j = 0; j < 4; j++) sum += around[2 * Q[4 * f + j]] / around[2 * Q[4 * f + j] + 1];
-        size[f] = sum / 4;
+        for (let j = 0; j < 4; j++) {
+          around[2 * Q[4 * f + j]] += size[f];
+          around[2 * Q[4 * f + j] + 1]++;
+        }
       }
     };
-    spread();
-    around.fill(0);
+    gather();
     for (let f = 0; f < rig.nq; f++) {
-      for (let j = 0; j < 4; j++) {
-        around[2 * Q[4 * f + j]] += size[f];
-        around[2 * Q[4 * f + j] + 1]++;
-      }
+      let sum = 0;
+      for (let j = 0; j < 4; j++) sum += around[2 * Q[4 * f + j]] / around[2 * Q[4 * f + j] + 1];
+      size[f] = sum / 4;
     }
-    spread();
-    let count = 0, changed = this.fineCount < 0;
-    for (let f = 0; f < rig.nq; f++) {
-      const on = size[f] >= this.fineOver ? 1 : 0;
-      if (on !== fine[f]) changed = true;
-      fine[f] = on;
-      count += on;
+    gather();
+    let count = 0;
+    for (let v = 0; v < rig.n; v++) {
+      const t = Math.max(0, Math.min(1, (around[2 * v] / (around[2 * v + 1] || 1) - (this.fineOver - 1)) / 2));
+      fine[v] = t * t * (3 - 2 * t);
     }
-    if (!changed) return;
+    for (let f = 0; f < rig.nq; f++) count += (fine[Q[4 * f]] + fine[Q[4 * f + 1]] + fine[Q[4 * f + 2]] + fine[Q[4 * f + 3]]) / 4;
     this.fineCount = count;
-    // a quad not drawn fine has its sixteen share four squares' lines: each takes its place in its parent's square
-    const QA = s2.geo.getAttribute("q") as THREE.BufferAttribute, A = QA.array as Float32Array;
-    const AT = [[0, 0], [1, 0], [1, 1], [0, 1]], TRI = [0, 1, 2, 0, 2, 3];
-    for (let g = 0; g < s2.nqSub; g++) {
-      const at = fine[g >> 4] ? AT : IN_PARENT[g & 3];
-      for (let k = 0; k < 6; k++) {
-        A[2 * (6 * g + k)] = at[TRI[k]][0];
-        A[2 * (6 * g + k) + 1] = at[TRI[k]][1];
-      }
-    }
-    QA.needsUpdate = true;
+    // carried to the surface's points as the lines' brightness is
+    const f1 = new Float32Array(s1.nSub), f2 = new Float32Array(s2.nSub);
+    evalSubdiv(s1, Q, fine, 1, f1);
+    evalSubdiv(s2, s1.quads, f1, 1, f2);
+    const FA = s2.geo.getAttribute("fine") as THREE.BufferAttribute, A = FA.array as Float32Array;
+    for (let c = 0; c < s2.corner.length; c++) A[c] = Math.max(0, Math.min(1, f2[s2.corner[c]]));
+    FA.needsUpdate = true;
   }
 
   /** free the GPU's copies of its geometry and materials (take `group` out of the scene too) */
