@@ -185,11 +185,17 @@ const applyViewMode = (mode: ViewMode) => {
 };
 
 /** how far out the arms hang to clear this body (degrees): measured again whenever its shape
- *  changes, once a dragged slider rests (it takes 20 ms, a frame and more on a phone) */
-let armOut = 0, armsDue: ReturnType<typeof setTimeout> | undefined;
-const fitArmsSoon = () => {
-  clearTimeout(armsDue);
-  armsDue = setTimeout(() => (armOut = armClearance(rig)), 150);
+ *  changes. Once a dragged slider rests, with the rest of what follows the shape and is too slow
+ *  for every step of a drag: the skin's centres of rotation worked out afresh (0.1 s; they go
+ *  along with their vertices meanwhile) and the muscles fitted to it. */
+let armOut = 0, fitDue: ReturnType<typeof setTimeout> | undefined;
+const fitSoon = () => {
+  clearTimeout(fitDue);
+  fitDue = setTimeout(() => {
+    rig.weightsChanged();
+    muscles.fitAnatomy();
+    armOut = armClearance(rig);
+  }, 150);
 };
 
 function buildCharacter(sex: "male" | "female", anatomy: AnatomyParams, keepCamera = false): void {
@@ -297,7 +303,12 @@ for (const name of ["fat", "muscle", "breast", "butt"] as const) {
   field(name).oninput = () => {
     syncSliderLabels();
     rig.setAnatomy(readAnatomy());
-    fitArmsSoon();
+    fitSoon();
+    // paused, nothing moves the soft tissue on to the new shape: put it there
+    if (!playing) {
+      tissue.reset();
+      maleGeo.reset();
+    }
     syncMeshDetail();
   };
 }
@@ -393,11 +404,13 @@ renderer.setAnimationLoop((now) => {
     controls.target.add(move);
     camera.position.add(move);
   } else if (GAIT_STYLES.includes(sel as GaitStyle)) {
-    walkT += simDt;
-    const wf = walkFrame(walkT, sel as GaitStyle, rig.anatomy, speed, armOut);
+    // the speed runs the walk's clock (as a factor on the time gone by, a touch of the slider
+    // after a minute's walking jumped the stride half a step)
+    walkT += simDt * speed;
+    const wf = walkFrame(walkT, sel as GaitStyle, rig.anatomy, 1, armOut);
     rig.pose(wf.pose);
     loads = wf.loads;
-    floorScroll = (floorScroll + wf.speedCmPerSec * simDt) % GRID_STEP;
+    floorScroll = (floorScroll + wf.speedCmPerSec * speed * simDt) % GRID_STEP;
     floorGrid.position.x = -floorScroll;
   } else {
     rig.pose(armsOut(PRESETS[sel] ?? PRESETS.neutral, armOut));
@@ -407,7 +420,8 @@ renderer.setAnimationLoop((now) => {
 
   tissue.step(simDt);
   maleGeo.update(simDt);
-  muscles.update(simDt, loads);
+  // paused, the muscles hold as they were (a step of no time is taken as "show the target")
+  if (playing) muscles.update(simDt, loads);
 
   rig.skin(skinned);
   vertexNormals(rig, skinned, skinNormals);
